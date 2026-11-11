@@ -33,9 +33,9 @@ py -3.12 -m venv .venv
 
 ## Параллельная работа
 
-- `codex/frontend` — Mark: `frontend/` и `tests/test_ui_labels.py`.
-- `codex/backend-extraction` — Mark: адаптеры `extraction/`, `ocr/`, конфигурация OCR и их тесты.
-- `codex/backend-rules` — напарник: `analysis/`, pipeline, исправления, хранение и их тесты.
+- `frontend` — Mark: `frontend/` и `tests/test_ui_labels.py`.
+- `backend-extraction` — Mark: адаптеры `extraction/`, `ocr/`, конфигурация OCR и их тесты.
+- `backend-rules` — напарник: `analysis/`, pipeline, исправления, хранение и их тесты.
 
 Общие контракты, `amounts.py`, `extraction/ports.py`, `extraction/loading.py`, `extraction/normalization.py`, общие фикстуры и корневые настройки меняются последовательно через `main` владельцем Mark с согласованием интерфейсов. Зависимости получают слиянием `main`; одни и те же файлы не переносятся независимо в разные ветки. Роли относятся к переносу и дальнейшей работе, исходное авторство сохраняется.
 
