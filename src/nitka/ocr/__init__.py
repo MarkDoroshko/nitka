@@ -1,0 +1,1 @@
+"""Local optical character recognition."""

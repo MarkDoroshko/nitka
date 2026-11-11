@@ -1,0 +1,17 @@
+/.venv/
+/.tooling/
+/runs/
+/models/
+/data/
+/uploads/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+/build/
+/dist/
