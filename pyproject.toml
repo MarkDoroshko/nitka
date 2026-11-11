@@ -8,10 +8,22 @@ version = "0.1.0"
 description = "Evidence-based reconciliation of reports and supporting documents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2,<3",
+    "openpyxl>=3.1,<4",
+    "pypdf>=6,<7",
+    "pypdfium2>=4,<6",
+    "Pillow>=10,<13",
+    "pdfplumber>=0.11,<1",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.9,<1", "mypy>=1.13,<3"]
+dev = [
+    "pytest>=8,<10",
+    "ruff>=0.9,<1",
+    "mypy>=1.13,<3",
+    "reportlab>=4,<5",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -19,13 +31,33 @@ where = ["src"]
 [tool.ruff]
 target-version = "py312"
 
+
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src"]
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = [
+    "openpyxl",
+    "openpyxl.*",
+    "pypdf",
+    "pypdf.*",
+    "pypdfium2",
+    "pypdfium2.*",
+    "PIL",
+    "PIL.*",
+    "pdfplumber",
+    "pdfplumber.*",
+    "pdfminer",
+    "pdfminer.*",
+    "reportlab",
+    "reportlab.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

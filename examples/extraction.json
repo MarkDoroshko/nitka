@@ -1,0 +1,45 @@
+{
+  "extraction_version": "synthetic-1",
+  "files": [
+    {
+      "file_id": "F-REPORT",
+      "name": "report.xlsx",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "role": "REPORT",
+      "status": "COMPLETED"
+    },
+    {
+      "file_id": "F-ACT",
+      "name": "act.pdf",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "role": "SUPPORT",
+      "status": "COMPLETED"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "S-R-AMOUNT",
+      "file_id": "F-REPORT",
+      "document_id": "D-REPORT",
+      "location": {"kind": "CELL", "sheet": "Report", "cell": "D2"},
+      "method": "TABLE",
+      "raw_text": "150 000,00",
+      "value": "150000.00",
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-A-AMOUNT",
+      "file_id": "F-ACT",
+      "document_id": "D-ACT",
+      "location": {"kind": "PAGE", "page": 2},
+      "method": "VISION",
+      "raw_text": "120 000,00",
+      "value": "120000.00",
+      "review_status": "UNREVIEWED"
+    }
+  ],
+  "rows": [
+    {"row_id": "R-1", "kind": "ITEM", "amount_source_id": "S-R-AMOUNT"},
+    {"row_id": "A-1", "kind": "ITEM", "amount_source_id": "S-A-AMOUNT"}
+  ]
+}

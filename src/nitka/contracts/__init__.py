@@ -1,1 +1,1 @@
-"""Shared data contracts."""
+"""Shared contracts for extraction, analysis, and presentation."""

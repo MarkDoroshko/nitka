@@ -1,0 +1,76 @@
+{
+  "profile_id": "synthetic-case-5-2026",
+  "case_number": 5,
+  "observed_case_numbers": {
+    "SPEC": 5,
+    "README_TXT": 19,
+    "ANSWER_WORKBOOK": 19
+  },
+  "contract": "DEMO-CONTRACT-001",
+  "service_period": {
+    "start": "2026-01-01",
+    "end": "2026-05-31",
+    "months": [
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05"
+    ]
+  },
+  "target_stage": 3,
+  "target_year": 2026,
+  "target_row_label": "3 этап 2026",
+  "document_date": null,
+  "article_codes": [
+    "0200",
+    "0300",
+    "0800",
+    "0900"
+  ],
+  "operation_id_rule": "contract + document number + document date; never amount, filename or answer key",
+  "classification_basis": "article and stage semantics from KFZ plus support-document purpose; ambiguous rows need manual review",
+  "fragment": "3 этап 2026",
+  "required_fields": [
+    "contract",
+    "service_period",
+    "document_date",
+    "article_code",
+    "operation_id",
+    "classification_basis",
+    "fragment"
+  ],
+  "working_roles": [
+    "REPORT",
+    "SUPPORT"
+  ],
+  "technical_roles": [
+    "TECHNICAL",
+    "ORACLE"
+  ],
+  "profile_source": "docs/contracts/case-profile.md",
+  "raw_header_text": "Договор № DEMO-CONTRACT-001; период 2025",
+  "conflicts": [
+    {
+      "field": "case_number",
+      "raw_value": "19",
+      "interpreted_value": "5",
+      "source": "README_TXT",
+      "detail": "README TXT and the answer-workbook analysis title say case 19; the specification and this profile say case 5."
+    },
+    {
+      "field": "case_number",
+      "raw_value": "19",
+      "interpreted_value": "5",
+      "source": "ANSWER_WORKBOOK",
+      "detail": "The oracle title is not a runtime document; it is preserved as a documentation conflict."
+    },
+    {
+      "field": "service_period",
+      "raw_value": "2025",
+      "interpreted_value": "2026-01..2026-05",
+      "source": "KFZ_HEADER",
+      "detail": "The scan header carries a historical period; the configured case period is January-May 2026. Original header text is retained."
+    }
+  ]
+}
