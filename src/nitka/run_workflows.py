@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from uuid import uuid4
 
+from nitka.analysis.completeness import CompletenessPolicy
 from nitka.analysis.matching import Matcher
 from nitka.contracts.analysis import AnalysisResult, Scope
 from nitka.contracts.inputs import input_manifest_hash
@@ -120,6 +121,9 @@ def run_and_save(
             run_id=run_id,
             revision=revision,
             input_manifest_hash=manifest_hash,
+            completeness=(
+                CompletenessPolicy.from_profile(profile) if profile is not None else None
+            ),
         )
         if analysis.input_manifest_hash != manifest_hash:
             raise StorageError("analysis manifest hash does not match the snapshot")
@@ -170,6 +174,11 @@ def correct_run_amount(
         run_id=run_id,
         revision=revision,
         input_manifest_hash=stored.manifest_hash,
+        completeness=(
+            CompletenessPolicy.from_profile(stored.profile)
+            if stored.profile is not None
+            else None
+        ),
     )
     return repository.publish_correction(stored, extraction, analysis, correction)
 
@@ -188,6 +197,11 @@ def replay_stored(stored: StoredRun, rules_version: str) -> AnalysisResult:
         run_id=stored.run_id,
         revision=stored.revision,
         input_manifest_hash=stored.manifest_hash,
+        completeness=(
+            CompletenessPolicy.from_profile(stored.profile)
+            if stored.profile is not None
+            else None
+        ),
     )
     if recomputed != stored.analysis:
         raise ReplayMismatchError(

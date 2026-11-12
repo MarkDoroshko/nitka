@@ -217,8 +217,10 @@ class LocalRunRepository:
             raise CorruptRunError("analysis.files does not match extraction.json")
         if analysis.sources != extraction.sources:
             raise CorruptRunError("analysis.sources does not match extraction.json")
-        if analysis.issues != extraction.issues:
-            raise CorruptRunError("analysis.issues does not match extraction.json")
+        if analysis.issues[: len(extraction.issues)] != extraction.issues:
+            raise CorruptRunError(
+                "analysis.issues does not preserve extraction.json issues"
+            )
 
         inputs = self.verify_inputs(run_dir, manifest) if verify_inputs else {}
         _verify_file_records(extraction.files, manifest, "extraction")
