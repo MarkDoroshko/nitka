@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
-from nitka.contracts.profile import CaseProfile
+from nitka.contracts.profile import CaseProfile, normalize_contract
 
 _RUSSIAN_MONTHS: Final[dict[str, int]] = {
     "январ": 1,
@@ -174,11 +174,6 @@ class ServicePeriodGate:
         month = day.isoformat()[:7]
         inside = self.profile.service_period.includes(day) and month in self._months
         return PeriodEvaluation(month, inside, f"document date {day} used for applicability")
-
-
-def normalize_contract(value: str | None) -> str:
-    """Preserve contract punctuation/suffixes; only whitespace/case vary."""
-    return re.sub(r"\s+", "", value or "").casefold()
 
 
 def contract_matches(profile: CaseProfile, value: str | None) -> bool | None:

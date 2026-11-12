@@ -145,6 +145,47 @@ class _ExtractionBuilder:
         return source_id
 
 
+@pytest.mark.parametrize("scope_problem", ["article_contract", "total_contract", "second_report"])
+def test_pipeline_blocks_matching_amounts_when_report_scope_is_unverified(
+    scope_problem: str,
+) -> None:
+    profile = _profile().model_copy(update={"article_codes": ["0800"]})
+    builder = _ExtractionBuilder()
+    builder.add_report("R-0800", "0800", "100.00")
+    builder.add_report("R-TOTAL", "0800", "150.00")
+    item, total = builder.rows
+    total.kind = "DOCUMENT_TOTAL"
+    total.fields.clear()
+    for row, problem in ((item, "article_contract"), (total, "total_contract")):
+        contract = "99/99/99-99" if scope_problem == problem else profile.contract
+        row.fields["contract"] = builder._field(
+            "F-REPORT", "D-REPORT", row.row_id, "contract", contract
+        )
+    if scope_problem == "second_report":
+        builder.files.append(FileRecord(
+            file_id="F-SECOND", name="second.pdf", sha256=_sha("second"),
+            role="REPORT", status="FAILED",
+        ))
+    builder.add_operation(_Operation("S-1", "149"))
+
+    result = run_pipeline(
+        [],
+        Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05"),
+        extractor=lambda _: builder.build(),
+        matcher=CaseMatcher(profile),
+    )
+    assert result.decision == "REVIEW_REQUIRED"
+    assert not result.matches
+    assert {check.check_id for check in result.checks} == {
+        "ARTICLE_AMOUNT:0800", "REPORT_TOTAL:R-TOTAL", "SUPPORT_TOTAL:OVERALL",
+    }
+    assert all(
+        check.reason_code == "REPORT_SCOPE_UNVERIFIED"
+        and check.state == "NOT_RUN" and check.calculation is None
+        for check in result.checks
+    )
+
+
 def _standard_operations() -> list[_Operation]:
     operations = [
         _Operation("R-04", "04", "100.00", operation_id="OP-04"),

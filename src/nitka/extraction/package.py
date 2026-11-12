@@ -26,9 +26,14 @@ from nitka.contracts.extraction import (
 )
 from nitka.contracts.inputs import InputManifest
 from nitka.contracts.profile import CaseProfile
+from nitka.contracts.report_scope import (
+    PACKAGE_EXTRACTION_VERSION,
+    REPORT_SCOPE_UNVERIFIED,
+    report_scope_issues,
+)
 from nitka.contracts.validation import validate_extraction
 from nitka.extraction.docx_support import DocxLocation as NativeDocxLocation
-from nitka.extraction.kfz import KfzFragment, KfzResult, parse_kfz
+from nitka.extraction.kfz import KfzFragment, KfzResult, kfz_header_value, parse_kfz
 from nitka.extraction.limits import (
     DEFAULT_PACKAGE_LIMITS,
     PackageLimits,
@@ -96,13 +101,15 @@ class PackageExtractor:
             document for document in documents if self._is_working(document.role)
         ]
         registry, read_errors = InputRegistry.register_package(accepted)
-        return self._extract_registered(
-            registry,
-            [
-                Issue(code="INPUT_UNREADABLE", detail=str(error))
-                for error in read_errors
-            ],
-        )
+        issues = [Issue(code="INPUT_UNREADABLE", detail=str(error)) for error in read_errors]
+        submitted_reports = sum(document.role == "REPORT" for document in accepted)
+        readable_reports = sum(entry.role == "REPORT" for entry in registry.inputs)
+        if readable_reports != submitted_reports:
+            issues.append(Issue(
+                code=REPORT_SCOPE_UNVERIFIED,
+                detail=f"Could read only {readable_reports} of {submitted_reports} submitted reports",
+            ))
+        return self._extract_registered(registry, issues)
 
     def extract_registered(self, registry: InputRegistry) -> PackageExtraction:
         """Use a caller-owned registry, preserving its file IDs and manifest."""
@@ -121,7 +128,7 @@ class PackageExtractor:
         if not registry.inputs:
             return PackageExtraction(
                 ExtractionResult(
-                    extraction_version="package-1",
+                    extraction_version=PACKAGE_EXTRACTION_VERSION,
                     files=[],
                     sources=[],
                     rows=[],
@@ -215,13 +222,15 @@ class PackageExtractor:
             )
 
         extraction = ExtractionResult(
-            extraction_version="package-1",
+            extraction_version=PACKAGE_EXTRACTION_VERSION,
             files=original.file_records(statuses),
             sources=sources,
             rows=rows,
             issues=issues,
         )
         validate_extraction(extraction)
+        if any(file.role == "REPORT" for file in extraction.files):
+            extraction.issues.extend(report_scope_issues(extraction, self._profile))
         return PackageExtraction(extraction, original.manifest, evidence, previews)
 
     def _read_kfz(self, entry: RegisteredInput, previews: Path) -> KfzResult:
@@ -324,20 +333,29 @@ def _project_kfz(
     fields: dict[str, str] = {}
     for key, fragments in result.header.items():
         if fragments:
-            fields[key] = _kfz_source(projected, fields, key, fragments, None)
+            value, issue = (
+                kfz_header_value(key, fragments)
+                if key in {"contract", "printed_period"} else (None, None)
+            )
+            if issue is not None:
+                projected.issue("KFZ_HEADER_REVIEW", f"{key}: {issue}")
+            fields[key] = _kfz_source(
+                projected, fields, key, fragments, value, needs_review=issue is not None
+            )
+    for page, provenance in enumerate(result.provenance, start=1):
+        projected.ocr_evidence(fields, page, provenance)
     if result.row is not None:
         for detail in result.row.arithmetic_issues:
             projected.issue("KFZ_ARITHMETIC_MISMATCH", detail)
-        for page, provenance in enumerate(result.provenance, start=1):
-            projected.ocr_evidence(fields, page, provenance)
-        fields["fragment"] = _kfz_source(
+        fields["selected_row"] = _kfz_source(
             projected,
             fields,
             "selected_row",
             result.row.label,
-            None,
+            " ".join(fragment.block.text for fragment in result.row.label),
             needs_review=bool(result.issues),
         )
+        fields["fragment"] = fields["selected_row"]
         for key, cell in result.row.cells.items():
             if cell.issue:
                 projected.issue("KFZ_CELL_REVIEW", f"{key}: {cell.issue}")

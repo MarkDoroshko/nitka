@@ -28,6 +28,24 @@ CaseField = Literal[
 WORKING_ROLES: Final[list[FileRole]] = ["REPORT", "SUPPORT"]
 TECHNICAL_ROLES: Final[list[FileRole]] = ["TECHNICAL", "ORACLE"]
 
+_KFZ_ROW = re.compile(r"([0-9]+)\s*этап[\s,]+([0-9]{4})(?:\s*г\.?)?\s*:?")
+
+
+def kfz_row_identity(text: str) -> tuple[int, int] | None:
+    """Parse a complete stage/year label from a numbered KFZ table."""
+    match = _KFZ_ROW.fullmatch(text.strip().casefold())
+    if match is None:
+        return None
+    try:
+        return int(match[1]), int(match[2])
+    except ValueError:
+        return None
+
+
+def normalize_contract(value: str | None) -> str:
+    """Preserve contract punctuation and suffixes when comparing identifiers."""
+    return re.sub(r"\s+", "", value or "").casefold()
+
 CASE_FIELD_NAMES: Final[tuple[CaseField, ...]] = (
     "contract",
     "service_period",

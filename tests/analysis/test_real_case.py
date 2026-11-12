@@ -29,6 +29,8 @@ def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
         for role in roles
         for path in sorted((Path(case_dir) / role.lower()).iterdir())
     ]
+    report = next(document.path for document in documents if document.role == "REPORT")
+    documents.extend([InputDocument(report, "TECHNICAL"), InputDocument(report, "ORACLE")])
     result = run_pipeline(
         documents,
         Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05"),
@@ -38,25 +40,54 @@ def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
     loaded = AnalysisResult.model_validate_json(result.model_dump_json())
     files = {file.file_id: file for file in loaded.files}
     assert len(files) == 23
+    assert all(file.role in {"REPORT", "SUPPORT"} and file.status != "FAILED" for file in files.values())
     assert loaded.decision == "DISCREPANCIES_FOUND"
     assert loaded.coverage.report_rows == 5
     assert loaded.coverage.checked_rows == 4
     checks = {check.check_id: check for check in loaded.checks}
-    for code in ("0200", "0300", "0900"):
-        assert checks[f"ARTICLE_AMOUNT:{code}"].state == "PASS"
-    for check_id, actual, expected in (
-        ("ARTICLE_AMOUNT:0800", "1145798.10", "1133298.10"),
-        ("SUPPORT_TOTAL:OVERALL", "11580377.40", "11567877.40"),
+    sources = {source.source_id: source for source in loaded.sources}
+    support_prefixes: set[str] = set()
+    for check_id, actual, expected, delta, prefixes in (
+        ("ARTICLE_AMOUNT:0200", "5558474.83", "5558474.83", "0.00", ["02"] * 5),
+        ("ARTICLE_AMOUNT:0300", "1671359.96", "1671359.96", "0.00", ["03"] * 5),
+        ("ARTICLE_AMOUNT:0800", "1145798.10", "1133298.10", "12500.00", ["04", "05", "06", "07"]),
+        ("ARTICLE_AMOUNT:0900", "3204744.51", "3204744.51", "0.00", ["08", "09", "11", "12", "13"]),
+        ("SUPPORT_TOTAL:OVERALL", "11580377.40", "11567877.40", "12500.00",
+         ["02"] * 5 + ["03"] * 5 + ["04", "05", "06", "07", "08", "09", "11", "12", "13"]),
     ):
         check = checks[check_id]
-        assert check.state == "FAIL" and check.calculation is not None
+        assert check.state == ("FAIL" if delta == "12500.00" else "PASS")
+        assert check.calculation is not None
         assert Decimal(check.calculation.actual) == Decimal(actual)
         assert Decimal(check.calculation.expected) == Decimal(expected)
-        assert Decimal(check.calculation.delta) == Decimal("12500.00")
+        assert Decimal(check.calculation.delta) == Decimal(delta)
+        support_ids = next(operand.source_ids for operand in check.operands if operand.name == "supported")
+        assert sorted(files[sources[item].file_id].name[:2] for item in support_ids) == prefixes
+        support_prefixes.update(prefixes)
+    assert support_prefixes.isdisjoint({"10", "14", "15"})
+    (internal,) = [check for check in loaded.checks if check.check_id.startswith("REPORT_TOTAL:")]
+    assert internal.state == "PASS"
+    assert internal.calculation is not None and Decimal(internal.calculation.delta) == 0
     assert {check.check_id for check in loaded.checks if check.state == "FAIL"} == {
         "ARTICLE_AMOUNT:0800", "SUPPORT_TOTAL:OVERALL",
     }
-    assert any(check.reason_code == "BREAKDOWN_SUPPORT_MISSING" for check in loaded.checks)
+    unverified = [check for check in loaded.checks if check.reason_code == "BREAKDOWN_SUPPORT_MISSING"]
+    assert len(unverified) == 9 and all(check.state == "NOT_RUN" for check in unverified)
     assert {(files[item.file_id].name[:2], item.reason) for item in loaded.excluded_documents} == {
         ("10", "DUPLICATE"), ("14", "OTHER_PERIOD"), ("15", "OTHER_CONTRACT"),
     }
+    assert not any(issue.code == "REPORT_SCOPE_UNVERIFIED" for issue in loaded.issues)
+    for prefix, expected_fields in {
+        "01": {"contract": "24/03/15-01", "printed_period": "2025-08..2026-05"},
+        "04": {"contract": "24/03/15-01", "date": "2026-01-28", "amount": "245000.00"},
+        "08": {"contract": "24/03/15-01", "date": "2026-01-31", "amount": "620000.00"},
+        "12": {"contract": "24/03/15-01", "date": "2026-04-29", "amount": "650000.00"},
+        "15": {"contract": "24/03/16-02", "date": "2026-05-15", "amount": "98000.00"},
+    }.items():
+        file_id = next(file.file_id for file in loaded.files if file.name.startswith(prefix))
+        for field, expected in expected_fields.items():
+            source = sources[f"S-{file_id}-{field}"]
+            assert source.value == expected
+            assert source.raw_text and source.confidence is not None
+            assert source.location.kind == "OCR"
+            assert source.location.page == 1 and source.location.bbox is not None

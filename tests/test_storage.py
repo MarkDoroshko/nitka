@@ -9,7 +9,7 @@ import pytest
 from openpyxl import Workbook
 
 import nitka.storage as storage
-from nitka.analysis.matching import Matcher
+from nitka.analysis.matching import CaseMatcher, Matcher
 from nitka.contracts.analysis import AnalysisResult, Match, Scope
 from nitka.contracts.extraction import (
     ExtractedRow,
@@ -19,6 +19,7 @@ from nitka.contracts.extraction import (
     Source,
 )
 from nitka.contracts.inputs import InputManifest, input_manifest_hash
+from nitka.contracts.profile import CaseProfile
 from nitka.contracts.revisions import AmountCorrection
 from nitka.corrections import correct_amount
 from nitka.extraction.limits import PackageLimitError, PackageLimits
@@ -162,6 +163,24 @@ def _run(
         matcher=matcher,
         run_id=run_id,
     )
+
+
+def test_saved_run_replays_unverified_scope_without_calculating_total(tmp_path: Path) -> None:
+    profile = CaseProfile.model_validate_json(
+        (Path(__file__).parent / "fixtures" / "case_contract.json").read_bytes()
+    )
+    root = tmp_path / "runs"
+    result = _run(root, _documents(tmp_path), matcher=CaseMatcher(profile))
+    assert result.decision == "REVIEW_REQUIRED"
+    assert result.matches == []
+    assert any(
+        issue.code == "REPORT_SCOPE_UNVERIFIED" and "0012" in issue.detail
+        for issue in result.issues
+    )
+    (internal,) = [check for check in result.checks if check.check_id.startswith("REPORT_TOTAL:")]
+    assert internal.state == "NOT_RUN" and internal.calculation is None
+    assert internal.reason_code == "REPORT_SCOPE_UNVERIFIED"
+    assert replay_run(root, result.run_id) == result
 
 
 def test_saves_evidence_and_replays_without_originals(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from nitka.analysis.amounts import check_amount
 from nitka.analysis.totals import check_total
 from nitka.contracts.analysis import Check, Match, Scope
 from nitka.contracts.extraction import ExtractionResult, Source
+from nitka.contracts.report_scope import REPORT_SCOPE_UNVERIFIED
 from nitka.contracts.validation import validate_extraction
 
 
@@ -34,6 +35,11 @@ def check_report(
     _require_unique((match.match_id for match in matches), "match")
     files = {file.file_id: file for file in extraction.files}
     sources = {source.source_id: source for source in extraction.sources}
+    blocked = dict(blocked_articles or {})
+    scope_block = REPORT_SCOPE_UNVERIFIED if (
+        REPORT_SCOPE_UNVERIFIED in blocked.values()
+        or any(issue.code == REPORT_SCOPE_UNVERIFIED for issue in extraction.issues)
+    ) else None
 
     report_items = {}
     support_rows = {}
@@ -91,8 +97,12 @@ def check_report(
             unknown_by_document.add(key)
 
     checks: list[Check] = []
-    blocked = dict(blocked_articles or {})
-    overall_block = None
+    overall_block = scope_block
+    if scope_block is not None:
+        accepted.clear()
+        ambiguous.clear()
+        for codes in articles_by_document.values():
+            blocked.update(dict.fromkeys(codes, scope_block))
     accepted_report_sources = {
         (article_code_for_row(report_items[row_id], sources), report_items[row_id].amount_source_id)
         for row_id in accepted
@@ -116,7 +126,9 @@ def check_report(
                 if row_match
                 else []
             )
-            checks.append(check_amount(row, source, row_match, support, currency))
+            checks.append(
+                check_amount(row, source, row_match, support, currency, blocked_reason=scope_block)
+            )
         elif row.kind == "PAGE_SUBTOTAL":
             # Report rows carry no page/section boundary, so summing "items
             # since the previous subtotal" would guess and can create a false
@@ -127,7 +139,7 @@ def check_report(
                     source,
                     items_by_document[key],
                     currency,
-                    blocked_reason="PAGE_BOUNDARY_UNKNOWN",
+                    blocked_reason=scope_block or "PAGE_BOUNDARY_UNKNOWN",
                 )
             )
         elif row.kind == "DOCUMENT_TOTAL":
@@ -137,7 +149,9 @@ def check_report(
                 material = sources[material_id]
                 items = [*items, material]
                 value = parse_amount(material.value).value
-                if material.review_status == "NEEDS_REVIEW" or value is None or Decimal(value) != 0:
+                if overall_block is None and (
+                    material.review_status == "NEEDS_REVIEW" or value is None or Decimal(value) != 0
+                ):
                     overall_block = "MATERIAL_SUPPORT_UNVERIFIED"
             checks.append(
                 check_total(
@@ -145,7 +159,7 @@ def check_report(
                     source,
                     items,
                     currency,
-                    blocked_reason=(
+                    blocked_reason=scope_block or (
                         "UNKNOWN_ROW_KIND" if key in unknown_by_document
                         else "REPORT_ARTICLE_MISSING" if set(required_articles) - articles_by_document[key]
                         else None

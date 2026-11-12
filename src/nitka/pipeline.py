@@ -8,6 +8,7 @@ from nitka.analysis.service import check_report
 from nitka.contracts.analysis import AnalysisResult, Match, Scope
 from nitka.contracts.extraction import ExtractionResult
 from nitka.contracts.inputs import input_manifest_hash as compute_input_manifest_hash
+from nitka.contracts.report_scope import REPORT_SCOPE_UNVERIFIED
 from nitka.extraction.ports import Extractor, InputDocument
 
 RULES_VERSION: Final[str] = "amount-and-totals-3"
@@ -25,6 +26,10 @@ def analyze_extraction(
     outcome = matches if isinstance(matches, MatchOutcome) else None
     links = outcome.matches if outcome is not None else matches
     assert not isinstance(links, MatchOutcome)
+    issues = [*extraction.issues, *(outcome.issues if outcome is not None else ())]
+    scope_blocked = any(issue.code == REPORT_SCOPE_UNVERIFIED for issue in issues)
+    if scope_blocked:
+        links = ()
     checks = check_report(
         extraction, links, scope,
         blocked_articles=outcome.blocked_articles if outcome is not None else None,
@@ -44,7 +49,7 @@ def analyze_extraction(
         file.status == "FAILED" for file in extraction.files
     ):
         execution = "FAILED"
-    elif extraction.issues or any(
+    elif extraction.issues or scope_blocked or any(
         file.status != "COMPLETED" for file in extraction.files
     ):
         execution = "PARTIAL"
@@ -54,7 +59,9 @@ def analyze_extraction(
     decision: Literal[
         "NO_DISCREPANCIES", "DISCREPANCIES_FOUND", "REVIEW_REQUIRED", "NOT_ASSESSED"
     ]
-    if not completed:
+    if scope_blocked:
+        decision = "REVIEW_REQUIRED"
+    elif not completed:
         decision = "NOT_ASSESSED"
     elif any(check.state == "FAIL" for check in checks):
         decision = "DISCREPANCIES_FOUND"
@@ -77,7 +84,7 @@ def analyze_extraction(
         sources=extraction.sources,
         matches=list(links),
         checks=checks,
-        issues=[*extraction.issues, *(outcome.issues if outcome is not None else ())],
+        issues=issues,
         excluded_documents=list(outcome.excluded_documents) if outcome is not None else [],
     )
 

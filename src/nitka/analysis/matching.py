@@ -20,12 +20,12 @@ from nitka.analysis.classification import (
     DocumentClassifier,
     ServicePeriodGate,
     contract_matches,
-    normalize_contract,
     operation_key,
 )
 from nitka.contracts.analysis import ExcludedDocument, Match
 from nitka.contracts.extraction import ExtractionResult, Issue, Source
-from nitka.contracts.profile import CaseProfile
+from nitka.contracts.profile import CaseProfile, normalize_contract
+from nitka.contracts.report_scope import REPORT_SCOPE_UNVERIFIED, report_scope_issues
 
 
 class Matcher(Protocol):
@@ -236,6 +236,16 @@ class CaseMatcher:
         ]
 
     def match(self, extraction: ExtractionResult) -> MatchOutcome:
+        scope_already_blocked = any(
+            issue.code == REPORT_SCOPE_UNVERIFIED for issue in extraction.issues
+        )
+        scope_issues = () if scope_already_blocked else report_scope_issues(extraction, self.profile)
+        if scope_already_blocked or scope_issues:
+            return MatchOutcome(
+                (), (), (), tuple(self.profile.article_codes),
+                dict.fromkeys(self.profile.article_codes, REPORT_SCOPE_UNVERIFIED),
+                scope_issues,
+            )
         support = SupportOperationReader().read(extraction, self.profile)
         report_rows = ReportArticleReader().read(extraction)
         excluded: list[ExcludedDocument] = []

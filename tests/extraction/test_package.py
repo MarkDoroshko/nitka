@@ -1,6 +1,7 @@
 import os
 import shutil
 from collections import Counter
+from datetime import date
 from pathlib import Path
 from typing import assert_type
 
@@ -9,6 +10,7 @@ from openpyxl import Workbook
 
 from nitka.analysis.aggregation import CaseAggregator
 from nitka.analysis.matching import CaseMatcher
+from nitka.contracts.analysis import Scope
 from nitka.contracts.extraction import (
     CellLocation,
     DocxLocation,
@@ -28,6 +30,7 @@ from nitka.extraction.registry import InputRegistry
 from nitka.extraction.support_documents import SupportDocument, SupportPageLocation
 from nitka.ocr import OcrBlock, OcrEngine, OcrError, OcrPage
 from nitka.ocr.engine import OcrProvenance
+from nitka.pipeline import analyze_extraction
 
 
 class _UnavailableOcr:
@@ -100,7 +103,10 @@ def test_shared_profile_drives_article_matching(
         KfzRow(
             profile.target_stage, profile.target_year, (fragment("3 этап 2026"),), cells
         ),
-        {},
+        {
+            "contract": (fragment(f"Договор № {profile.contract}"),),
+            "printed_period": (fragment("Август 2025 г. — Май 2026 г."),),
+        },
         (),
     )
     monkeypatch.setattr(PackageExtractor, "_read_kfz", lambda *_: native)
@@ -118,6 +124,75 @@ def test_shared_profile_drives_article_matching(
     assert totals.report["0200"].amount == "42.00"
     assert totals.support["0200"].amount == "42"
     assert totals.report_total.amount == "42.00"
+    shorter_period = profile.service_period.model_copy(update={"end": date(2026, 5, 30)})
+    different_profile = profile.model_copy(update={"service_period": shorter_period})
+    blocked = CaseMatcher(different_profile).match(result)
+    assert not blocked.matches
+    assert any("2026-05-31 differs" in issue.detail for issue in blocked.issues)
+
+
+@pytest.mark.parametrize(
+    ("contracts", "period", "label", "reason"),
+    [
+        (("44-19",), "Август 2025 г. — Май 2026 г.", "3 этап, 2026 г.", "Report contract"),
+        ((), "Август 2025 г. — Май 2026 г.", "3 этап, 2026 г.", "Report contract"),
+        (("DEMO-CONTRACT-001", "44-19"), "Август 2025 г. — Май 2026 г.",
+         "3 этап, 2026 г.", "Report contract"),
+        (("DEMO-CONTRACT-001",), "Август 2025 г. — Июнь 2026 г.",
+         "3 этап, 2026 г.", "2026-06-30"),
+        (("DEMO-CONTRACT-001",), "Август 2025 г. — Май 2025 г.",
+         "3 этап, 2026 г.", "Report period"),
+        (("DEMO-CONTRACT-001",), "Август 2025 г. — Май 2026 г.",
+         "13 этап, 2026 г.", "Report row"),
+        (("DEMO-CONTRACT-001",), "Август 2025 г. — Май 2026 г.",
+         "ВСЕГО 3 этап, 2026 г.", "Report row"),
+    ],
+)
+def test_unverified_report_scope_blocks_amounts_with_both_matcher_interfaces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contracts: tuple[str, ...],
+    period: str,
+    label: str,
+    reason: str,
+) -> None:
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"synthetic report")
+    profile = _case_profile().model_copy(update={"article_codes": ["0800"]})
+
+    def fragment(text: str) -> KfzFragment:
+        return KfzFragment(1, OcrBlock(text=text, bbox=(10, 10, 30, 30), confidence=0.99))
+
+    native = KfzResult(
+        KfzRow(3, 2026, (fragment(label),), {
+            "0800": KfzCell("42.00", (fragment("42,00"),), (fragment("Статья 0800"),)),
+            "total": KfzCell("43.00", (fragment("43,00"),), (fragment("Итого"),)),
+        }),
+        {
+            "contract": tuple(fragment(f"Договор № {value}") for value in contracts),
+            "printed_period": (fragment(period),),
+        },
+        (),
+    )
+    monkeypatch.setattr(PackageExtractor, "_read_kfz", lambda *_: native)
+    extractor = PackageExtractor(profile, ocr=_UnavailableOcr(), preview_dir=tmp_path)
+    extraction = extractor([InputDocument(report, "REPORT")])
+    extraction = ExtractionResult.model_validate_json(extraction.model_dump_json())
+    matcher = CaseMatcher(profile)
+    scope = Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05")
+
+    assert any(reason in issue.detail for issue in extraction.issues)
+    for matches in (matcher.match(extraction), matcher(extraction)):
+        result = analyze_extraction(extraction, matches, scope)
+        assert result.decision == "REVIEW_REQUIRED"
+        assert result.matches == []
+        assert len(result.checks) == 3
+        assert all(
+            check.state == "NOT_RUN" and check.reason_code == "REPORT_SCOPE_UNVERIFIED"
+            and check.calculation is None
+            for check in result.checks
+        )
+    assert any(source.raw_text == "42,00" and source.value == "42.00" for source in extraction.sources)
 
 
 def test_port_retains_fragments_and_ocr_provenance_after_round_trip(
@@ -156,6 +231,21 @@ def test_port_retains_fragments_and_ocr_provenance_after_round_trip(
     profile = sources[row.fields["evidence_ocr_profile_2"]]
     assert profile.value is not None
     assert OcrProvenance.model_validate_json(profile.value) == provenance
+
+
+def test_unreadable_second_report_is_not_silently_dropped(tmp_path: Path) -> None:
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"synthetic report")
+    extraction = _extractor(tmp_path / "previews")([
+        InputDocument(report, "REPORT"),
+        InputDocument(tmp_path / "missing.pdf", "REPORT"),
+    ])
+    assert len(extraction.files) == 1
+    assert any(
+        issue.code == "REPORT_SCOPE_UNVERIFIED"
+        and "1 of 2 submitted reports" in issue.detail
+        for issue in extraction.issues
+    )
 
 
 def test_conflicting_support_contract_stays_evidence_only(tmp_path: Path) -> None:

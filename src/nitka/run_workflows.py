@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import uuid4
 
-from nitka.analysis.matching import Matcher
+from nitka.analysis.matching import CaseMatcher, Matcher
 from nitka.contracts.analysis import AnalysisResult, Scope
 from nitka.contracts.inputs import input_manifest_hash
+from nitka.contracts.report_scope import report_scope_issues
 from nitka.contracts.revisions import AmountCorrection
 from nitka.contracts.validation import validate_extraction
 from nitka.corrections import correct_amount
@@ -47,6 +48,11 @@ def run_and_save(
         if input_manifest_hash(extraction.files) != manifest_hash:
             raise StorageError(
                 "extractor file records do not match the input snapshot manifest"
+            )
+        if isinstance(matcher, CaseMatcher):
+            extraction.issues.extend(
+                issue for issue in report_scope_issues(extraction, matcher.profile)
+                if issue not in extraction.issues
             )
         matches = matcher(extraction)
         analysis = analyze_extraction(

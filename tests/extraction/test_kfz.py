@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from nitka.extraction.kfz import extract_kfz, parse_kfz
+from nitka.extraction.kfz import extract_kfz, kfz_header_value, parse_kfz
 from nitka.ocr import OcrBlock, OcrEngine, OcrPage
 from nitka.ocr.engine import OcrProvenance
 
@@ -127,6 +127,16 @@ def test_requires_matching_article_headings() -> None:
     assert row is not None
     assert row.cells["0800"].review_status == row.cells["0900"].review_status == "NEEDS_REVIEW"
     assert row.cells["0200"].value == "2175200.50"
+
+
+def test_conflicting_prefixed_contract_is_retained_and_requires_review() -> None:
+    page = _page()
+    text = "Основание: договор № 99-99 от 01.02.2027 г."
+    blocks = (*page.blocks, _block(text, 900, 65))
+    page = page.model_copy(update={"blocks": blocks, "reading_order": tuple(range(len(blocks)))})
+    contracts = parse_kfz([page], stage=4, year=2028).header["contract"]
+    assert len(contracts) == 2 and contracts[1].block.text == text
+    assert kfz_header_value("contract", contracts) == (None, "Conflicting header values")
 
 
 def test_preserves_printed_amounts_when_totals_disagree() -> None:

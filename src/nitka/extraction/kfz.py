@@ -13,6 +13,8 @@ from tempfile import TemporaryDirectory
 from typing import Literal
 
 from nitka.amounts import normalize_amount
+from nitka.contracts.profile import kfz_row_identity, normalize_contract
+from nitka.contracts.report_scope import REPORT_SCOPE_MIN_OCR_CONFIDENCE
 from nitka.extraction.pdf import PdfInspector
 from nitka.ocr import OcrBlock, OcrEngine, OcrError, OcrPage
 from nitka.ocr.engine import OcrProvenance
@@ -32,12 +34,23 @@ _HEADINGS = (
     (15, 16, r"\b0900\b"),
     (16, 17, r"^итого\s*:?$"),
 )
-_ROW = re.compile(r"([0-9]+)\s*этап[\s,]+([0-9]{4})(?:\s*г\.?)?\s*:?")
 _COLUMN_NUMBER = re.compile(r"(?:[1-9]|1[0-7])")
 _OCR_GROUPED = re.compile(r"-?[0-9]+(?: (?:[0-9]{3})+)+[.,][0-9]{2}")
 _DATE = re.compile(r'["«]?[0-9]{1,2}["»]?\s+[а-я]+\s+[0-9]{4}\b')
 _PERIOD = re.compile(r"^[а-я]+\s+[0-9]{4}.*[-–—]\s*[а-я]+\s+[0-9]{4}\b")
-_CONTRACT = re.compile(r"\b(?:контракт\w*|договор\w*)\s*(?:№|n[оo°]?)?\s*[0-9]")
+_CONTRACT_LABEL = re.compile(r"\b(?:контракт|договор)\b")
+_CONTRACT = re.compile(
+    r"(?:контракт|договор)\s*:?\s*(?:№\s*|n[оo°]?\s+)?"
+    r"([\w/-]+)(?:\s+от\s+[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4}(?:\s*г\.?)?)?"
+)
+_MONTH_RANGE = re.compile(
+    r"([а-я]+)\s+([1-9][0-9]{3})(?:\s*г\.?)?\s*[-–—]\s*"
+    r"([а-я]+)\s+([1-9][0-9]{3})(?:\s*г\.?)?"
+)
+_MONTH_NAMES = (
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+)
 _VALUE_CONFIDENCE = 0.80
 _HEADING_CONFIDENCE = 0.65
 
@@ -75,6 +88,41 @@ class KfzResult:
     header: dict[str, tuple[KfzFragment, ...]]
     provenance: tuple[OcrProvenance, ...]
     issues: tuple[str, ...] = ()
+
+
+def kfz_header_value(
+    key: str, fragments: Sequence[KfzFragment]
+) -> tuple[str | None, str | None]:
+    """Normalize a scope field only when every observed instance agrees."""
+    values = set()
+    for fragment in fragments:
+        if fragment.block.confidence < REPORT_SCOPE_MIN_OCR_CONFIDENCE:
+            return None, "Low OCR confidence"
+        text = fragment.block.text.strip().casefold()
+        value = _header_contract(text) if key == "contract" else _header_period(text)
+        if value is None:
+            return None, "Unrecognized header format"
+        values.add(value)
+    if len(values) != 1:
+        return None, "Conflicting header values"
+    return values.pop(), None
+
+
+def _header_contract(text: str) -> str | None:
+    label = _CONTRACT_LABEL.search(text)
+    match = _CONTRACT.fullmatch(text, label.start()) if label else None
+    if match is None or not any(character.isdecimal() for character in match[1]):
+        return None
+    return normalize_contract(match[1])
+
+
+def _header_period(text: str) -> str | None:
+    match = _MONTH_RANGE.fullmatch(text)
+    if match is None or match[1] not in _MONTH_NAMES or match[3] not in _MONTH_NAMES:
+        return None
+    start = f"{match[2]}-{_MONTH_NAMES.index(match[1]) + 1:02}"
+    end = f"{match[4]}-{_MONTH_NAMES.index(match[3]) + 1:02}"
+    return f"{start}..{end}" if start <= end else None
 
 
 @dataclass(frozen=True)
@@ -123,7 +171,7 @@ def parse_kfz(pages: Sequence[OcrPage], *, stage: int, year: int) -> KfzResult:
         issues.append(f"KFZ row for stage {stage}, year {year} was not located in a numbered table")
     elif row is None:
         issues.append(f"Multiple KFZ rows match stage {stage}, year {year}")
-    elif any(fragment.block.confidence < _VALUE_CONFIDENCE for fragment in row.label):
+    elif any(fragment.block.confidence < REPORT_SCOPE_MIN_OCR_CONFIDENCE for fragment in row.label):
         reason = "KFZ row label requires review"
         issues.append(reason)
         row = KfzRow(
@@ -182,7 +230,7 @@ def _header(
     for block in above:
         text = block.text.strip().casefold()
         fragments: tuple[OcrBlock, ...] = (block,)
-        if _CONTRACT.search(text):
+        if _CONTRACT_LABEL.search(text):
             key = "contract"
         elif _PERIOD.match(text):
             key = "printed_period"
@@ -247,8 +295,7 @@ def _read_rows(
     for index, line in enumerate(lines):
         # A full match excludes cumulative rows and rows for other years.
         label = " ".join(block.text.strip().casefold() for block in line)
-        match = _ROW.fullmatch(label)
-        if match is None or (int(match[1]), int(match[2])) != (stage, year):
+        if kfz_row_identity(label) != (stage, year):
             continue
         center = centers[index]
         start = max(bottom, center - 0.65 * height)

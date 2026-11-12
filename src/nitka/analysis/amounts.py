@@ -14,6 +14,8 @@ def check_amount(
     match: Match | None,
     support: list[Source],
     currency: Scope | str,
+    *,
+    blocked_reason: str | None = None,
 ) -> Check:
     """Compare one report row with its accepted support positions.
 
@@ -35,7 +37,9 @@ def check_amount(
     supported = None
     state: Literal["PASS", "FAIL", "NOT_RUN"] = "NOT_RUN"
 
-    if not scope.currency.strip():
+    if blocked_reason is not None:
+        reason = blocked_reason
+    elif not scope.currency.strip():
         reason = "SCOPE_CURRENCY_MISSING"
     elif row.kind == "UNKNOWN":
         reason = "UNKNOWN_ROW_KIND"
