@@ -80,9 +80,10 @@ def test_shared_profile_drives_article_matching(
 ) -> None:
     report = tmp_path / "report.pdf"
     report.write_bytes(b"synthetic report")
+    profile = _case_profile()
     payroll = _payroll(
         tmp_path / "payroll.xlsx",
-        project_and_period="24/03/15-01 | Период: Январь 2026",
+        project_and_period=f"{profile.contract} | Период: Январь 2026",
     )
 
     def fragment(text: str) -> KfzFragment:
@@ -90,7 +91,6 @@ def test_shared_profile_drives_article_matching(
             1, OcrBlock(text=text, bbox=(10, 10, 30, 30), confidence=0.99)
         )
 
-    profile = _case_profile()
     cells = {
         "0200": KfzCell("42.00", (fragment("42,00"),), (fragment("Статья 0200"),)),
         "total": KfzCell("42.00", (fragment("42,00"),), (fragment("Итого"),)),
