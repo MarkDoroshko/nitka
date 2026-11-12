@@ -31,7 +31,7 @@ class _Operation:
     row_id: str
     document_number: str
     amount: str = "100.00"
-    contract: str = "24/03/15-01"
+    contract: str = field(default_factory=lambda: _profile().contract)
     period: str = "2026-01"
     document_date: str = "2026-01-15"
     operation_id: str | None = None
@@ -210,7 +210,7 @@ def _standard_extraction(
             "R-15",
             "15",
             "150.00",
-            contract="24/03/15-02",
+            contract="OTHER-DEMO-CONTRACT",
             operation_id="OP-15",
         )
     )
