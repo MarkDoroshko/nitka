@@ -1,0 +1,4 @@
+# Frontend dependencies. Install the Nitka package from the repository root first:
+#   pip install -e ".[dev]"
+streamlit>=1.40,<2
+reportlab>=4,<5
