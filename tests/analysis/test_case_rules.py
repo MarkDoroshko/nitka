@@ -19,17 +19,10 @@ SCOPE = Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-05")
 REPORT_AMOUNTS = {
     "0200": "5558474.83",
     "0300": "1671359.96",
-    "0800": "1133298.10",
-    "0900": "3204744.51",
-}
-SUPPORT_AMOUNTS = {
-    "0200": "5558474.83",
-    "0300": "1671359.96",
     "0800": "1145798.10",
     "0900": "3204744.51",
 }
-REPORT_TOTAL = "11567877.40"
-SUPPORT_TOTAL = "11580377.40"
+REPORT_TOTAL = "11580377.40"
 
 
 def _sha(value: str) -> str:
@@ -201,7 +194,7 @@ def _case() -> tuple[ExtractionResult, list[Match]]:
         support_ids["0300"].append(
             builder.add_support(f"CON-{index}", "0300", amount, file_id=file_id)
         )
-    for index, amount in enumerate(("500000.00", "645798.10"), start=1):
+    for index, amount in enumerate(("500000.00", "633298.10"), start=1):
         file_id = f"F-PROD-{index}"
         builder.add_file(file_id, "SUPPORT", f"prod-{index}.pdf")
         support_ids["0800"].append(
@@ -233,17 +226,12 @@ def _case() -> tuple[ExtractionResult, list[Match]]:
     extraction = builder.build()
     matches = [
         Match(
-            match_id="M-0800",
-            report_row_id="R-0800",
-            support_row_ids=support_ids["0800"],
+            match_id=f"M-{article}",
+            report_row_id=f"R-{article}",
+            support_row_ids=ids + (["SAL-1-DUPLICATE"] if article == "0200" else []),
             state="ACCEPTED",
-        ),
-        Match(
-            match_id="M-0900",
-            report_row_id="R-0900",
-            support_row_ids=support_ids["0900"],
-            state="ACCEPTED",
-        ),
+        )
+        for article, ids in support_ids.items()
     ]
     return extraction, matches
 
@@ -279,14 +267,14 @@ def test_only_0800_and_overall_have_positive_12500_delta() -> None:
 
     production = checks["ARTICLE_AMOUNT:0800"]
     assert production.state == "FAIL"
-    assert production.reason_code == "ARTICLE_SUPPORT_EXCEEDS_REPORT"
+    assert production.reason_code == "ARTICLE_REPORT_EXCEEDS_SUPPORT"
     assert _calc(production).actual == "1145798.10"
     assert _calc(production).expected == "1133298.10"
     assert _calc(production).delta == "12500.00"
 
     overall = checks["SUPPORT_TOTAL:OVERALL"]
     assert overall.state == "FAIL"
-    assert overall.reason_code == "OVERALL_SUPPORT_EXCEEDS_REPORT"
+    assert overall.reason_code == "OVERALL_REPORT_EXCEEDS_SUPPORT"
     assert _calc(overall).actual == "11580377.40"
     assert _calc(overall).expected == "11567877.40"
     assert _calc(overall).delta == "12500.00"
@@ -332,3 +320,33 @@ def test_internal_total_and_support_overall_are_separate_checks() -> None:
     assert internal.state == "PASS"
     assert overall.state == "FAIL"
     assert internal.evidence_ids != overall.evidence_ids
+
+
+def test_unmatched_primary_cannot_enter_the_overall_sum() -> None:
+    extraction, matches = _case()
+    incomplete = [match for match in matches if match.report_row_id != "R-0800"]
+    checks = _by_id(check_report(extraction, incomplete, SCOPE))
+    assert checks["ARTICLE_AMOUNT:0800"].state == "NOT_RUN"
+    overall = checks["SUPPORT_TOTAL:OVERALL"]
+    assert overall.state == "NOT_RUN"
+    assert overall.calculation is None and overall.operands[1].value is None
+
+
+def test_explicit_support_article_conflict_blocks_external_comparison() -> None:
+    extraction, matches = _case()
+    support = next(row for row in extraction.rows if row.row_id == "PROD-1")
+    sources = {source.source_id: source for source in extraction.sources}
+    sources[support.fields["article_code"]].value = "0900"
+    checks = _by_id(check_report(extraction, matches, SCOPE))
+    assert checks["ARTICLE_AMOUNT:0800"].reason_code == "SUPPORT_ARTICLE_CONFLICT"
+    assert checks["SUPPORT_TOTAL:OVERALL"].state == "NOT_RUN"
+
+
+def test_missing_report_article_prevents_false_arithmetic_error() -> None:
+    extraction, matches = _case()
+    extraction.rows = [row for row in extraction.rows if row.row_id != "R-0900"]
+    matches = [match for match in matches if match.report_row_id != "R-0900"]
+    checks = _by_id(check_report(extraction, matches, SCOPE, required_articles=("0800", "0900")))
+    assert checks["REPORT_TOTAL:R-TOTAL"].reason_code == "REPORT_ARTICLE_MISSING"
+    assert checks["REPORT_TOTAL:R-TOTAL"].calculation is None
+    assert checks["ARTICLE_AMOUNT:0900"].reason_code == "ARTICLE_REPORT_MISSING"

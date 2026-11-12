@@ -4,8 +4,11 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 from nitka.analysis.classification import ArticleClassification, DocumentClassifier
 from nitka.analysis.matching import CaseMatcher
+from nitka.contracts.analysis import Scope
 from nitka.contracts.extraction import (
     ExtractedRow,
     ExtractionResult,
@@ -14,6 +17,7 @@ from nitka.contracts.extraction import (
     Source,
 )
 from nitka.contracts.profile import CaseProfile
+from nitka.pipeline import run_pipeline
 
 PROFILE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "case_contract.json"
 
@@ -278,8 +282,8 @@ def test_partially_matching_document_numbers_do_not_merge() -> None:
     profile = _profile()
     builder = _ExtractionBuilder()
     builder.add_report("R-0900", "0900")
-    builder.add_operation(_Operation("R-12", "12", "100.00", operation_id=None))
-    builder.add_operation(_Operation("R-12P", "12-П", "200.00", operation_id=None))
+    builder.add_operation(_Operation("R-12", "12", "100.00", description="административная услуга"))
+    builder.add_operation(_Operation("R-12P", "12-П", "200.00", description="административная услуга"))
     extraction = builder.build()
 
     outcome = CaseMatcher(profile).match(extraction)
@@ -351,3 +355,87 @@ def test_ambiguous_classification_is_not_turned_into_an_accepted_article() -> No
 
     assert outcome.ambiguous_operations
     assert not [match for match in outcome.matches if match.state == "ACCEPTED"]
+
+
+def test_classification_ignores_document_numbers() -> None:
+    classifier = DocumentClassifier(_profile())
+    assert classifier.classify("04", "Административное сопровождение", None).article_code == "0900"
+    assert classifier.classify("77", "Техническое обслуживание испытательного стенда", None).article_code == "0800"
+    assert classifier.classify("07", "Неназванная услуга", None).ambiguous
+
+
+@pytest.mark.parametrize(
+    ("period", "document_date", "accepted", "excluded"),
+    [
+        ("", "2026-01-31", True, False),
+        ("2026-06", "2026-01-31", False, True),
+        ("2026-01", "2026-06-01", True, False),
+        ("2026-01..2026-06", "2026-01-31", False, False),
+        ("", "2026-02-30", False, False),
+    ],
+)
+def test_period_evidence_precedes_document_date(
+    period: str, document_date: str, accepted: bool, excluded: bool
+) -> None:
+    builder = _ExtractionBuilder()
+    builder.add_report("R-0800", "0800")
+    builder.add_operation(_Operation("S-1", "149", period=period, document_date=document_date))
+    extraction = builder.build()
+    if not period:
+        extraction.rows[-1].fields.pop("service_period")
+    result = CaseMatcher(_profile()).match(extraction)
+    assert any(m.state == "ACCEPTED" for m in result.matches) is accepted
+    assert any(item.reason == "OTHER_PERIOD" for item in result.excluded_documents) is excluded
+
+
+def test_same_operation_with_equivalent_amount_format_is_duplicate() -> None:
+    builder = _ExtractionBuilder()
+    builder.add_report("R-0800", "0800")
+    builder.add_operation(_Operation("S-1", "123", "100.00"))
+    builder.add_operation(_Operation("S-2", "123", "100"))
+    outcome = CaseMatcher(_profile()).match(builder.build())
+    (match,) = outcome.matches
+    assert match.state == "ACCEPTED" and match.support_row_ids == ["S-1"]
+    (excluded,) = outcome.excluded_documents
+    assert excluded.reason == "DUPLICATE"
+
+
+def test_unknown_or_unreadable_support_blocks_an_otherwise_accepted_article() -> None:
+    builder = _ExtractionBuilder()
+    builder.add_report("R-0800", "0800")
+    builder.add_operation(_Operation("S-1", "1"))
+    builder.add_operation(_Operation("S-2", "2", description="Неназванная услуга"))
+    extraction = builder.build()
+    matcher = CaseMatcher(_profile())
+    assert matcher.match(extraction).blocked_articles["0800"] == "UNASSIGNED_SUPPORT"
+    extraction.rows.pop()
+    extraction.files[-1].status = "PARTIAL"
+    assert matcher.match(extraction).blocked_articles["0800"] == "SUPPORT_INPUT_UNREADABLE"
+    assert all(link.state == "AMBIGUOUS" for link in matcher(extraction))
+
+
+def test_missing_payroll_month_is_not_a_shortfall() -> None:
+    profile = _profile()
+    builder = _ExtractionBuilder()
+    builder.add_report("R-0200", "0200", "500.00")
+    builder.add_report("R-0800", "0800", "150.00")
+    for month in range(1, 5):
+        builder.add_operation(_Operation(
+            f"PAY-{month}", "30", period=f"2026-{month:02}", article_code="0200",
+            operation_id="PAY",
+        ))
+    builder.add_operation(_Operation("ACT", "45", "100.00"))
+    extraction = builder.build()
+    result = run_pipeline(
+        [], Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05"),
+        extractor=lambda _: extraction, matcher=CaseMatcher(profile),
+    )
+    checks = {check.check_id: check for check in result.checks}
+    payroll = checks["ARTICLE_AMOUNT:0200"]
+    assert payroll.state == "NOT_RUN" and payroll.reason_code == "SUPPORT_MONTH_MISSING"
+    assert payroll.operands[1].value is None and payroll.calculation is None
+    assert checks["SUPPORT_TOTAL:OVERALL"].state == "NOT_RUN"
+    assert checks["ARTICLE_AMOUNT:0800"].state == "FAIL"
+    assert result.decision == "DISCREPANCIES_FOUND"
+    assert result.coverage.report_rows == 2 and result.coverage.checked_rows == 1
+    assert result.coverage.required_checks > result.coverage.report_rows

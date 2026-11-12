@@ -60,7 +60,7 @@ class LegacyReplayPolicy:
     as published. It is never silently recomputed with the current rules.
     """
 
-    READ_ONLY_RULES: frozenset[str] = frozenset({"amount-only-1"})
+    READ_ONLY_RULES: frozenset[str] = frozenset({"amount-only-1", "amount-and-totals-2"})
 
     def replay(self, stored: StoredRun, rules_version: str) -> AnalysisResult:
         if stored.analysis.rules_version in self.READ_ONLY_RULES:

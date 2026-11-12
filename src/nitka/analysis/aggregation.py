@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, localcontext
 from typing import Literal
 
@@ -37,10 +37,12 @@ class CaseTotals:
     support: dict[str, ArticleAggregate]
     report_total: ArticleAggregate
     support_total: ArticleAggregate
+    blocked: Mapping[str, str] = field(default_factory=dict)
+    required_articles: tuple[str, ...] = ()
 
     @property
     def article_codes(self) -> tuple[str, ...]:
-        return tuple(sorted(set(self.report) | set(self.support)))
+        return tuple(sorted(set(self.report) | set(self.support) | set(self.required_articles)))
 
 
 @dataclass
@@ -59,7 +61,7 @@ class _AggregateBuilder:
         self.seen_sources.add(source.source_id)
         self.source_ids.append(source.source_id)
         self.row_ids.append(row_id)
-        if source.value is None or not source.value.strip():
+        if source.review_status == "NEEDS_REVIEW" or source.value is None or not source.value.strip():
             self.missing = True
             return
         normalized = normalize_amount(source.value)
@@ -90,30 +92,70 @@ class CaseAggregator:
         extraction: ExtractionResult,
         *,
         accepted_support_by_article: Mapping[str, set[str]] | None = None,
+        blocked: Mapping[str, str] | None = None,
+        required_articles: tuple[str, ...] = (),
     ) -> None:
         self.extraction = extraction
         self.sources = {source.source_id: source for source in extraction.sources}
         self.files = {file.file_id: file for file in extraction.files}
-        self.accepted_support_by_article = accepted_support_by_article or {}
+        self.accepted_support_by_article = accepted_support_by_article
+        self.blocked = dict(blocked or {})
+        self.required_articles = required_articles
 
     def totals(self) -> CaseTotals:
         report = self._collect("REPORT")
-        support = self._collect("SUPPORT")
+        blocked = self.blocked.copy()
+        accepted = self.accepted_support_by_article
+        support = self._collect("SUPPORT") if accepted is None else self._accepted(accepted, blocked)
         report_total = self._report_total(report)
-        support_total = _sum_aggregates("TOTAL", support.values())
+        required = set(report) | set(self.required_articles)
+        support_total = _sum_aggregates(
+            "TOTAL",
+            (
+                support.get(code, ArticleAggregate(code, None, (), (), missing=True))
+                for code in sorted(required)
+            ),
+        )
+        if (
+            not required or required - report.keys() or required.intersection(blocked)
+            or any(article.amount is None for article in report.values())
+        ):
+            support_total = ArticleAggregate(
+                "TOTAL", None, support_total.source_ids, support_total.row_ids, missing=True
+            )
         return CaseTotals(
             report=report,
             support=support,
             report_total=report_total,
             support_total=support_total,
+            blocked=blocked,
+            required_articles=self.required_articles,
         )
+
+    def _accepted(
+        self, accepted: Mapping[str, set[str]], blocked: dict[str, str]
+    ) -> dict[str, ArticleAggregate]:
+        rows = {row.row_id: row for row in self.extraction.rows if row.kind == "ITEM"}
+        source_articles: dict[str, str] = {}
+        result: dict[str, ArticleAggregate] = {}
+        for code, ids in sorted(accepted.items()):
+            builder = _AggregateBuilder(code)
+            for row_id in sorted(ids):
+                row = rows[row_id]
+                source = self.sources[row.amount_source_id]
+                previous = source_articles.setdefault(source.source_id, code)
+                if previous != code:
+                    blocked[code] = blocked[previous] = "SUPPORT_SOURCE_REUSED"
+                builder.add(row_id, source)
+            if builder.row_ids:
+                result[code] = builder.build()
+        return result
 
     def _collect(
         self, role: Literal["REPORT", "SUPPORT"]
     ) -> dict[str, ArticleAggregate]:
         builders: dict[str, _AggregateBuilder] = {}
         seen_sources: set[str] = set()
-        accepted = self.accepted_support_by_article
         for row in self.extraction.rows:
             if row.kind != "ITEM":
                 continue
@@ -126,9 +168,6 @@ class CaseAggregator:
             article = article_code_for_row(row, self.sources)
             if article is None:
                 continue
-            if role == "SUPPORT" and article in accepted:
-                if row.row_id not in accepted[article]:
-                    continue
             if amount_source.source_id in seen_sources:
                 # A reused amount source is one operation, not two.
                 continue
@@ -169,15 +208,31 @@ def check_article_totals(totals: CaseTotals, scope: Scope | str) -> list[Check]:
     for code in totals.article_codes:
         reported = totals.report.get(code)
         supported = totals.support.get(code)
-        checks.append(_article_check(code, reported, supported, scope))
+        reason = totals.blocked.get(code)
+        if reason is None and not scope.currency.strip():
+            reason = "SCOPE_CURRENCY_MISSING"
+        checks.append(
+            _not_run(
+                reason, f"ARTICLE:{code}", f"ARTICLE_AMOUNT:{code}", reported,
+                replace(supported, amount=None) if supported is not None else None,
+            )
+            if reason else _article_check(code, reported, supported, scope)
+        )
     return checks
 
 
-def check_overall(totals: CaseTotals, scope: Scope | str) -> Check | None:
+def check_overall(
+    totals: CaseTotals, scope: Scope | str, *, blocked_reason: str | None = None
+) -> Check | None:
     """Compare the printed/report total with the independent support total."""
     if not totals.article_codes:
         return None
     scope = _scope(scope)
+    if blocked_reason or not scope.currency.strip():
+        return _not_run(
+            blocked_reason or "SCOPE_CURRENCY_MISSING", "OVERALL", "SUPPORT_TOTAL:OVERALL",
+            totals.report_total, replace(totals.support_total, amount=None),
+        )
     return _overall_check(totals.report_total, totals.support_total, scope)
 
 
@@ -189,9 +244,9 @@ def article_code_for_row(
         if source_id is None:
             continue
         source = sources.get(source_id)
-        if source is None:
+        if source is None or source.review_status == "NEEDS_REVIEW":
             continue
-        value = source.value if source.value is not None else source.raw_text
+        value = source.value
         if value:
             match = _ARTICLE_RE.search(value)
             if match is not None:
@@ -282,14 +337,14 @@ def _compare(
     assert reported.amount is not None and supported.amount is not None
     with localcontext() as context:
         context.prec = 50
-        actual = Decimal(supported.amount)
-        expected = Decimal(reported.amount)
+        actual = Decimal(reported.amount)
+        expected = Decimal(supported.amount)
         delta = actual - expected
     if delta > 0:
         state: Literal["PASS", "FAIL", "NOT_RUN"] = "FAIL"
-        reason = excess_reason
+        reason = below_reason
     elif delta < 0:
-        state, reason = "FAIL", below_reason
+        state, reason = "FAIL", excess_reason
     else:
         state, reason = "PASS", equal_reason
     return Check(
@@ -314,8 +369,8 @@ def _compare(
             ),
         ],
         calculation=Calculation(
-            actual=supported.amount,
-            expected=reported.amount,
+            actual=reported.amount,
+            expected=supported.amount,
             delta=format(delta, "f"),
             tolerance=TOLERANCE,
             unit=scope.currency,
@@ -373,7 +428,7 @@ def _sum_aggregates(
         sources.extend(aggregate.source_ids)
         rows.extend(aggregate.row_ids)
         if aggregate.amount is None:
-            missing = missing or aggregate.missing
+            missing = True
             invalid = invalid or aggregate.invalid
             continue
         with localcontext() as context:
@@ -390,7 +445,7 @@ def _sum_aggregates(
 
 
 def _source_amount(source: Source) -> tuple[str | None, str | None]:
-    if source.value is None or not source.value.strip():
+    if source.review_status == "NEEDS_REVIEW" or source.value is None or not source.value.strip():
         return None, "missing"
     normalized = normalize_amount(source.value)
     if normalized is None:

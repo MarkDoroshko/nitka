@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Final
 
 from nitka.contracts.profile import CaseProfile
-
-PRODUCTION_DOCUMENTS: Final[frozenset[int]] = frozenset({4, 5, 6, 7})
-ADMIN_DOCUMENTS: Final[frozenset[int]] = frozenset({8, 9, 11, 12, 13})
 
 _RUSSIAN_MONTHS: Final[dict[str, int]] = {
     "январ": 1,
@@ -36,26 +34,32 @@ _PRODUCTION_WORDS: Final[tuple[str, ...]] = (
     "производ",
     "цех",
     "оборуд",
-    "материал",
     "перевоз",
     "склад",
     "ремонт",
     "энерг",
     "подряд",
     "строит",
+    "испытательн",
+    "калибров",
+    "метролог",
 )
 _ADMIN_WORDS: Final[tuple[str, ...]] = (
     "администра",
     "офис",
-    "аренд",
-    "связ",
     "банк",
     "консульт",
     "юрид",
     "бухгал",
     "командир",
     "программ",
-    "it",
+    "документооборот",
+    "управлен",
+    "общехозяйствен",
+)
+_NEGATED_PRODUCTION = re.compile(
+    r"\bне\s+относятся\s+непосредственно\s+к\s+(?:отдельной\s+)?"
+    r"производственной\s+операции\b"
 )
 
 
@@ -99,30 +103,19 @@ class DocumentClassifier:
                 detail=f"article {explicit!r} is outside the profile",
             )
 
-        number = _document_number(document_number)
-        if number in PRODUCTION_DOCUMENTS:
-            return ArticleClassification(
-                "0800",
-                "document number 04-07",
-                detail=f"support document {number:02d} is production",
-            )
-        if number in ADMIN_DOCUMENTS:
-            return ArticleClassification(
-                "0900",
-                "document number 08/09/11/12/13",
-                detail=f"support document {number:02d} is administrative",
-            )
-
         text = (description or "").casefold()
-        production = any(word in text for word in _PRODUCTION_WORDS)
-        administrative = any(word in text for word in _ADMIN_WORDS)
-        if production and not administrative:
+        production_text = _NEGATED_PRODUCTION.sub("", text)
+        production = any(word in production_text for word in _PRODUCTION_WORDS)
+        administrative = any(word in text for word in _ADMIN_WORDS) or bool(
+            re.search(r"\bуслуг\w*\s+связи\b", text)
+        )
+        if production and not administrative and "0800" in self.profile.article_codes:
             return ArticleClassification(
                 "0800",
                 "description contains production semantics",
                 detail=description or "",
             )
-        if administrative and not production:
+        if administrative and not production and "0900" in self.profile.article_codes:
             return ArticleClassification(
                 "0900",
                 "description contains administrative semantics",
@@ -158,13 +151,29 @@ class ServicePeriodGate:
             return PeriodEvaluation(
                 None, None, f"service period {raw_period!r} is not parseable"
             )
-        inside = month in self._months
+        first = date.fromisoformat(f"{month}-01")
+        last = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
+        start, end = self.profile.service_period.start, self.profile.service_period.end
+        inside: bool | None = month in self._months and first <= end and last > start
+        if inside and (first < start or (last - end).days > 1):
+            return PeriodEvaluation(month, None, f"service month {month} overlaps a period boundary")
         detail = (
             f"service month {month} is inside {min(self._months)}..{max(self._months)}"
             if inside
             else f"service month {month} is outside {min(self._months)}..{max(self._months)}"
         )
         return PeriodEvaluation(month, inside, detail)
+
+    def document_date(self, raw_date: str | None) -> PeriodEvaluation:
+        if raw_date is None or re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_date) is None:
+            return PeriodEvaluation(None, None, "usable document date is missing")
+        try:
+            day = date.fromisoformat(raw_date)
+        except ValueError:
+            return PeriodEvaluation(None, None, f"document date {raw_date!r} is invalid")
+        month = day.isoformat()[:7]
+        inside = self.profile.service_period.includes(day) and month in self._months
+        return PeriodEvaluation(month, inside, f"document date {day} used for applicability")
 
 
 def normalize_contract(value: str | None) -> str:
@@ -202,13 +211,6 @@ def _normalize_text(value: str | None) -> str:
     return re.sub(r"\s+", "", value or "").casefold()
 
 
-def _document_number(value: str | None) -> int | None:
-    if value is None:
-        return None
-    match = re.search(r"\b0*(\d{1,2})\b", value)
-    return int(match.group(1)) if match else None
-
-
 def _four_digit_code(value: str | None) -> str | None:
     if value is None:
         return None
@@ -218,9 +220,9 @@ def _four_digit_code(value: str | None) -> str | None:
 
 def _parse_month(value: str, default_year: int) -> str | None:
     text = value.casefold()
-    match = re.search(r"(?P<year>20\d{2})\s*[-./]\s*(?P<month>\d{1,2})", text)
+    match = re.fullmatch(r"(?P<year>20\d{2})\s*[-./]\s*(?P<month>\d{1,2})", text.strip())
     if match is None:
-        match = re.search(r"(?P<month>\d{1,2})\s*[-./]\s*(?P<year>20\d{2})", text)
+        match = re.fullmatch(r"(?P<month>\d{1,2})\s*[-./]\s*(?P<year>20\d{2})", text.strip())
     if match is not None:
         month = int(match.group("month"))
         year = int(match.group("year"))
@@ -228,9 +230,11 @@ def _parse_month(value: str, default_year: int) -> str | None:
             return f"{year:04d}-{month:02d}"
         return None
 
-    russian_month = _russian_month(text)
-    year_match = re.search(r"\b(20\d{2})\b", text)
-    year = int(year_match.group(1)) if year_match else default_year
+    literal = re.fullmatch(r"([а-яё]+)(?:\s+(20\d{2})(?:\s+(?:года|г\.?))?)?", text.strip())
+    if literal is None:
+        return None
+    russian_month = _russian_month(literal[1])
+    year = int(literal[2]) if literal[2] else default_year
     return f"{year:04d}-{russian_month:02d}" if russian_month is not None else None
 
 

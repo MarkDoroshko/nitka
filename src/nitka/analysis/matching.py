@@ -9,19 +9,22 @@ excluded documents carry their own diagnostics separate from accepted Match.
 from __future__ import annotations
 
 import re
-from collections import defaultdict
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Protocol, Sequence
 
+from nitka.amounts import parse_amount
 from nitka.analysis.classification import (
     ArticleClassification,
     DocumentClassifier,
     ServicePeriodGate,
     contract_matches,
+    normalize_contract,
     operation_key,
 )
 from nitka.contracts.analysis import ExcludedDocument, Match
-from nitka.contracts.extraction import ExtractionResult, Source
+from nitka.contracts.extraction import ExtractionResult, Issue, Source
 from nitka.contracts.profile import CaseProfile
 
 
@@ -46,6 +49,7 @@ class SupportOperation:
     article_code: str | None
     classification_basis: str | None
     fragment: str | None
+    period_present: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,9 @@ class MatchOutcome:
     matches: tuple[Match, ...]
     excluded_documents: tuple[ExcludedDocument, ...]
     ambiguous_operations: tuple[SupportOperation, ...]
+    required_articles: tuple[str, ...] = ()
+    blocked_articles: dict[str, str] = field(default_factory=dict)
+    issues: tuple[Issue, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -86,18 +93,46 @@ class _FieldReader:
             if source_id is None:
                 continue
             source = self.sources.get(source_id)
-            if source is None:
+            if source is None or source.review_status == "NEEDS_REVIEW":
                 continue
-            value = source.value if source.value is not None else source.raw_text
+            value = source.value
             if value is not None and value.strip():
                 return value.strip()
         return None
 
 
+def _contract(
+    reader: _FieldReader,
+    fields: dict[str, str],
+    profile: CaseProfile | None,
+    description: str | None,
+) -> str | None:
+    value = reader.value(fields, "contract")
+    if value is not None or profile is None:
+        return value
+    source = reader.sources.get(fields.get("contract", ""))
+    if (
+        source is None or source.method != "OCR"
+        or source.confidence is None or source.confidence < 0.95
+        or source.value is None
+    ):
+        return None
+    token = normalize_contract(source.value)
+    if not re.fullmatch(r"\d+(?:/\d+)+-\d+", token):
+        return None
+    if re.search(rf"(?<![\w/-]){re.escape(token)}(?![\w/-])", description or ""):
+        return token
+    if token == normalize_contract(profile.contract):
+        return token
+    return None
+
+
 class SupportOperationReader:
     """Build support operations from field-to-source references."""
 
-    def read(self, extraction: ExtractionResult) -> list[SupportOperation]:
+    def read(
+        self, extraction: ExtractionResult, profile: CaseProfile | None = None
+    ) -> list[SupportOperation]:
         files = {file.file_id: file for file in extraction.files}
         sources = {source.source_id: source for source in extraction.sources}
         reader = _FieldReader(sources)
@@ -122,10 +157,6 @@ class SupportOperationReader:
             description = reader.value(
                 row.fields, "description", "name", "purpose", "fragment"
             )
-            if document_number is None:
-                document_number = _number_from_operation_id(operation_id)
-            if document_number is None:
-                document_number = _number_from_text(description)
             field_ids = tuple(
                 source_id for source_id in row.fields.values() if source_id in sources
             )
@@ -137,7 +168,7 @@ class SupportOperationReader:
                     amount_source_id=amount_source.source_id,
                     source_ids=_unique((amount_source.source_id, *field_ids)),
                     amount=amount_source.value,
-                    contract=reader.value(row.fields, "contract"),
+                    contract=_contract(reader, row.fields, profile, description),
                     service_period=reader.value(row.fields, "service_period", "period"),
                     document_date=reader.value(row.fields, "document_date"),
                     document_number=document_number,
@@ -148,6 +179,9 @@ class SupportOperationReader:
                         row.fields, "classification_basis"
                     ),
                     fragment=reader.value(row.fields, "fragment"),
+                    period_present=any(
+                        key in row.fields for key in ("service_period", "period", "evidence_period")
+                    ),
                 )
             )
         return operations
@@ -190,52 +224,68 @@ class CaseMatcher:
         self.periods = ServicePeriodGate(profile)
 
     def __call__(self, extraction: ExtractionResult, /) -> Sequence[Match]:
-        return list(self.match(extraction).matches)
+        outcome = self.match(extraction)
+        by_row = {row.row_id: row.article_code for row in ReportArticleReader().read(extraction)}
+        # Callers of the legacy links-only interface must not turn incomplete
+        # evidence into an accepted monetary comparison.
+        return [
+            link.model_copy(update={"state": "AMBIGUOUS"})
+            if link.state == "ACCEPTED" and by_row.get(link.report_row_id) in outcome.blocked_articles
+            else link
+            for link in outcome.matches
+        ]
 
     def match(self, extraction: ExtractionResult) -> MatchOutcome:
-        support = SupportOperationReader().read(extraction)
+        support = SupportOperationReader().read(extraction, self.profile)
         report_rows = ReportArticleReader().read(extraction)
         excluded: list[ExcludedDocument] = []
+        issues: list[Issue] = []
         remaining: list[SupportOperation] = []
-        incomplete: list[SupportOperation] = []
+        ambiguous_groups: list[_AmbiguousGroup] = []
 
         for operation in support:
+            classification = self.classifier.classify(
+                operation.document_number, operation.description, operation.article_code
+            )
             contract_ok = contract_matches(self.profile, operation.contract)
             if contract_ok is False:
                 excluded.append(
-                    _excluded(
-                        operation,
-                        "OTHER_CONTRACT",
-                        f"support contract {operation.contract!r} does not match "
-                        f"profile {self.profile.contract!r}",
-                    )
+                    _excluded(operation, "OTHER_CONTRACT", f"support contract {operation.contract!r}")
                 )
                 continue
             if contract_ok is None:
-                incomplete.append(operation)
+                ambiguous_groups.append(_AmbiguousGroup((operation,), classification))
+                issues.append(Issue(
+                    code="CONTRACT_UNVERIFIED", file_id=operation.file_id,
+                    detail="No reliable support contract",
+                ))
                 continue
             period = self.periods.evaluate(operation.service_period)
+            used_document_date = (
+                operation.service_period is None and not operation.period_present
+                and classification.article_code in {"0800", "0900"}
+            )
+            if used_document_date:
+                period = self.periods.document_date(operation.document_date)
             if period.inside is False:
                 excluded.append(_excluded(operation, "OTHER_PERIOD", period.detail))
                 continue
             if period.inside is None:
-                incomplete.append(operation)
+                ambiguous_groups.append(_AmbiguousGroup((operation,), classification))
+                issues.append(Issue(
+                    code="PERIOD_UNVERIFIED", file_id=operation.file_id, detail=period.detail,
+                ))
                 continue
+            if used_document_date:
+                issues.append(Issue(
+                    code="DOCUMENT_DATE_APPLICABILITY", file_id=operation.file_id,
+                    detail=period.detail,
+                ))
             remaining.append(operation)
 
         valid: list[_ClassifiedOperation] = []
-        ambiguous_groups: list[_AmbiguousGroup] = [
-            _AmbiguousGroup(
-                (operation,),
-                self.classifier.classify(
-                    operation.document_number,
-                    operation.description,
-                    operation.article_code,
-                ),
-            )
-            for operation in incomplete
-        ]
-        for group in _group_by_identity(remaining):
+        hashes = {file.file_id: file.sha256 for file in extraction.files}
+        for group in _group_by_identity(remaining, hashes):
             resolved = self._resolve_group(group, excluded)
             if isinstance(resolved, _ClassifiedOperation):
                 valid.append(resolved)
@@ -243,13 +293,55 @@ class CaseMatcher:
                 ambiguous_groups.append(resolved)
 
         matches = self._matches(report_rows, valid, ambiguous_groups)
-        ambiguous_operations = tuple(
-            operation for group in ambiguous_groups for operation in group.operations
+        report_codes = {row.article_code for row in report_rows}
+        for item in valid:
+            if item.classification.article_code not in report_codes:
+                ambiguous_groups.append(_AmbiguousGroup((item.operation,), item.classification))
+        ambiguous_operations = _unique_operations(
+            [operation for group in ambiguous_groups for operation in group.operations]
         )
+        blocked = {}
+        for ambiguous_group in ambiguous_groups:
+            code = ambiguous_group.classification.article_code
+            if code not in report_codes:
+                blocked.update(dict.fromkeys(self.profile.article_codes, "UNASSIGNED_SUPPORT"))
+            elif code is not None:
+                blocked[code] = "AMBIGUOUS_MATCH"
+        issues.extend(
+            Issue(code="SUPPORT_UNRESOLVED", file_id=operation.file_id, detail=operation.row_id)
+            for operation in ambiguous_operations
+        )
+        matched_ids = {
+            support_id
+            for match in matches if match.state == "ACCEPTED"
+            for support_id in match.support_row_ids
+        }
+        for code in ("0200", "0300"):
+            if code not in self.profile.article_codes:
+                continue
+            found = {
+                self.periods.evaluate(item.operation.service_period).month
+                for item in valid
+                if item.classification.article_code == code and item.operation.row_id in matched_ids
+            }
+            missing = sorted(set(self.profile.month_labels()) - found)
+            if missing:
+                blocked.setdefault(code, "SUPPORT_MONTH_MISSING")
+                issues.append(Issue(
+                    code="SUPPORT_MONTH_MISSING", detail=f"{code}: {', '.join(missing)}",
+                ))
+        operation_files = {operation.file_id for operation in support}
+        if any(
+            file.role == "SUPPORT" and file.status != "COMPLETED" and file.file_id not in operation_files
+            for file in extraction.files
+        ) or any(
+            issue.code in {"INPUT_UNREADABLE", "INPUT_CHANGED"} for issue in extraction.issues
+        ):
+            for code in self.profile.article_codes:
+                blocked.setdefault(code, "SUPPORT_INPUT_UNREADABLE")
         return MatchOutcome(
-            matches=tuple(matches),
-            excluded_documents=tuple(excluded),
-            ambiguous_operations=_unique_operations(ambiguous_operations),
+            tuple(matches), tuple(excluded), ambiguous_operations,
+            tuple(self.profile.article_codes), blocked, tuple(issues),
         )
 
     def _resolve_group(
@@ -290,8 +382,11 @@ class CaseMatcher:
                     detail="same operation has different article codes",
                 ),
             )
-        amounts = {_decimal_text(operation.amount) for operation in group}
-        if len(group) > 1 and len(amounts) > 1:
+        amounts = {
+            Decimal(value) if (value := parse_amount(operation.amount).value) is not None else None
+            for operation in group
+        }
+        if len(group) > 1 and (len(amounts) != 1 or None in amounts):
             return _AmbiguousGroup(
                 group,
                 known[0].classification,
@@ -322,96 +417,46 @@ class CaseMatcher:
             if code is not None:
                 by_article[code].append(item.operation.row_id)
 
-        report_by_article: dict[str, list[ReportArticleRow]] = defaultdict(list)
-        for row in report_rows:
-            if row.article_code is not None:
-                report_by_article[row.article_code].append(row)
-
-        ambiguous_by_article: dict[str, set[str]] = defaultdict(set)
+        report_counts = Counter(row.article_code for row in report_rows)
+        uncertain: dict[str, set[str]] = defaultdict(set)
         for group in ambiguous_groups:
             code = group.classification.article_code
-            if code is not None:
-                ambiguous_by_article[code].update(
-                    operation.row_id for operation in group.operations
-                )
+            for article in (code,) if code else self.profile.article_codes:
+                uncertain[article].update(operation.row_id for operation in group.operations)
 
-        matches: list[Match] = []
-        handled_ambiguous: set[str] = set()
-        for article, support_ids in sorted(by_article.items()):
-            rows = report_by_article.get(article, [])
-            ambiguous_ids = ambiguous_by_article.get(article)
-            if ambiguous_ids is not None:
-                # If any operation for this article needs review, the whole
-                # article row needs review; never let the accepted subset hide it.
-                all_ids = sorted(set(support_ids) | ambiguous_ids)
-                for row in rows:
-                    matches.append(
-                        Match(
-                            match_id=f"M-{article}-{row.row_id}-REVIEW",
-                            report_row_id=row.row_id,
-                            support_row_ids=all_ids,
-                            state="AMBIGUOUS",
-                        )
-                    )
-                handled_ambiguous.add(article)
+        matches = []
+        for row in report_rows:
+            row_article = row.article_code
+            if row_article is None:
                 continue
-            unique_ids = sorted(set(support_ids))
-            if len(rows) == 1:
-                matches.append(
-                    Match(
-                        match_id=f"M-{article}-{rows[0].row_id}",
-                        report_row_id=rows[0].row_id,
-                        support_row_ids=unique_ids,
-                        state="ACCEPTED",
-                    )
-                )
-            elif len(rows) > 1:
-                for row in rows:
-                    matches.append(
-                        Match(
-                            match_id=f"M-{article}-{row.row_id}-REVIEW",
-                            report_row_id=row.row_id,
-                            support_row_ids=unique_ids,
-                            state="AMBIGUOUS",
-                        )
-                    )
-
-        for article, ambiguous_ids in sorted(ambiguous_by_article.items()):
-            if article in handled_ambiguous:
-                continue
-            rows = report_by_article.get(article, [])
-            for row in rows:
-                matches.append(
-                    Match(
-                        match_id=f"M-{article}-{row.row_id}-REVIEW",
-                        report_row_id=row.row_id,
-                        support_row_ids=sorted(ambiguous_ids),
-                        state="AMBIGUOUS",
-                    )
-                )
+            candidates = sorted(set(by_article[row_article]) | uncertain[row_article])
+            if candidates:
+                needs_review = bool(uncertain[row_article]) or report_counts[row_article] != 1
+                matches.append(Match(
+                    match_id=f"M-{row_article}-{row.row_id}" + ("-REVIEW" if needs_review else ""),
+                    report_row_id=row.row_id,
+                    support_row_ids=candidates,
+                    state="AMBIGUOUS" if needs_review else "ACCEPTED",
+                ))
         return matches
 
 
 def _group_by_identity(
-    operations: list[SupportOperation],
+    operations: list[SupportOperation], hashes: dict[str, str]
 ) -> list[tuple[SupportOperation, ...]]:
     groups: dict[tuple[str, ...], list[SupportOperation]] = defaultdict(list)
-    unique: list[SupportOperation] = []
-    for operation in operations:
+    counts = Counter(operation.file_id for operation in operations)
+    for operation in sorted(operations, key=lambda item: (item.file_id, item.row_id)):
         key = operation_key(
-            operation.operation_id,
-            operation.contract,
-            operation.document_number,
+            operation.operation_id, operation.contract, operation.document_number,
             operation.document_date,
         )
-        if key is None:
-            unique.append(operation)
-        else:
-            groups[key].append(operation)
-    return [
-        *[tuple(group) for group in groups.values()],
-        *[(operation,) for operation in unique],
-    ]
+        if operation.article_code in {"0200", "0300"} and key is not None:
+            key = (*key, operation.service_period or "")
+        if key is None and counts[operation.file_id] == 1:
+            key = ("file", hashes[operation.file_id])
+        groups[key or ("row", operation.row_id)].append(operation)
+    return [tuple(group) for group in groups.values()]
 
 
 def _excluded(
@@ -426,31 +471,11 @@ def _excluded(
     )
 
 
-def _number_from_operation_id(value: str | None) -> str | None:
-    if value is None:
-        return None
-    for token in re.split(r"[|;/,\s]+", value):
-        if re.fullmatch(r"\d{1,2}", token):
-            return token
-    return None
-
-
-def _number_from_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    match = re.search(r"(?:№|N|документ(?:а)?)\s*(\d{1,3})", value, re.IGNORECASE)
-    return match.group(1) if match else None
-
-
 def _article_code(value: str | None) -> str | None:
     if value is None:
         return None
     match = re.search(r"\b(0[2-9]00)\b", value)
     return match.group(1) if match else None
-
-
-def _decimal_text(value: str | None) -> str:
-    return value.strip() if value is not None else ""
 
 
 def _unique(values: Sequence[str]) -> tuple[str, ...]:

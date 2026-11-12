@@ -1,6 +1,8 @@
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from decimal import Decimal
 
+from nitka.amounts import parse_amount
 from nitka.analysis.aggregation import (
     CaseAggregator,
     article_code_for_row,
@@ -24,6 +26,9 @@ def check_report(
     extraction: ExtractionResult,
     matches: Sequence[Match],
     currency: Scope | str,
+    *,
+    blocked_articles: Mapping[str, str] | None = None,
+    required_articles: tuple[str, ...] = (),
 ) -> list[Check]:
     validate_extraction(extraction)
     _require_unique((match.match_id for match in matches), "match")
@@ -32,6 +37,7 @@ def check_report(
 
     report_items = {}
     support_rows = {}
+    support_codes = {}
     for row in extraction.rows:
         source = sources[row.amount_source_id]
         role = files[source.file_id].role
@@ -39,6 +45,7 @@ def check_report(
             report_items[row.row_id] = row
         if role == "SUPPORT" and row.kind == "ITEM":
             support_rows[row.row_id] = source
+            support_codes[row.row_id] = article_code_for_row(row, sources)
 
     accepted: dict[str, Match] = {}
     ambiguous: dict[str, Match] = {}
@@ -65,6 +72,7 @@ def check_report(
 
     items_by_document: dict[tuple[str, str], list[Source]] = defaultdict(list)
     unknown_by_document: set[tuple[str, str]] = set()
+    articles_by_document: dict[tuple[str, str], set[str]] = defaultdict(set)
     seen_item_sources: set[str] = set()
     for row in extraction.rows:
         source = sources[row.amount_source_id]
@@ -72,6 +80,8 @@ def check_report(
             continue
         key = (source.file_id, source.document_id)
         if row.kind == "ITEM":
+            if (code := article_code_for_row(row, sources)) is not None:
+                articles_by_document[key].add(code)
             if source.source_id in seen_item_sources:
                 # One amount source reused by several row IDs is one item.
                 continue
@@ -81,6 +91,12 @@ def check_report(
             unknown_by_document.add(key)
 
     checks: list[Check] = []
+    blocked = dict(blocked_articles or {})
+    overall_block = None
+    accepted_report_sources = {
+        (article_code_for_row(report_items[row_id], sources), report_items[row_id].amount_source_id)
+        for row_id in accepted
+    }
     for row in extraction.rows:
         source = sources[row.amount_source_id]
         if files[source.file_id].role != "REPORT":
@@ -88,6 +104,13 @@ def check_report(
         key = (source.file_id, source.document_id)
         if row.kind in {"ITEM", "UNKNOWN"}:
             row_match = accepted.get(row.row_id) or ambiguous.get(row.row_id)
+            article = article_code_for_row(row, sources) if row.kind == "ITEM" else None
+            if article is not None:
+                if row_match is not None and row_match.state == "AMBIGUOUS":
+                    blocked.setdefault(article, "AMBIGUOUS_MATCH")
+                elif row_match is None and (article, row.amount_source_id) not in accepted_report_sources:
+                    blocked.setdefault(article, "ARTICLE_SUPPORT_MISSING")
+                continue
             support = (
                 [support_rows[row_id] for row_id in row_match.support_row_ids]
                 if row_match
@@ -108,14 +131,24 @@ def check_report(
                 )
             )
         elif row.kind == "DOCUMENT_TOTAL":
+            items = items_by_document[key]
+            material_id = row.fields.get("materials")
+            if material_id is not None and all(item.source_id != material_id for item in items):
+                material = sources[material_id]
+                items = [*items, material]
+                value = parse_amount(material.value).value
+                if material.review_status == "NEEDS_REVIEW" or value is None or Decimal(value) != 0:
+                    overall_block = "MATERIAL_SUPPORT_UNVERIFIED"
             checks.append(
                 check_total(
                     row,
                     source,
-                    items_by_document[key],
+                    items,
                     currency,
                     blocked_reason=(
-                        "UNKNOWN_ROW_KIND" if key in unknown_by_document else None
+                        "UNKNOWN_ROW_KIND" if key in unknown_by_document
+                        else "REPORT_ARTICLE_MISSING" if set(required_articles) - articles_by_document[key]
+                        else None
                     ),
                 )
             )
@@ -125,14 +158,23 @@ def check_report(
         report_row = report_items[match.report_row_id]
         article = article_code_for_row(report_row, sources)
         if article is not None:
+            if any(
+                support_codes[row_id] not in (None, article)
+                for row_id in match.support_row_ids
+            ):
+                blocked[article] = "SUPPORT_ARTICLE_CONFLICT"
             accepted_support_by_article[article].update(match.support_row_ids)
 
     totals = CaseAggregator(
         extraction,
         accepted_support_by_article=accepted_support_by_article,
+        blocked=blocked,
+        required_articles=required_articles,
     ).totals()
     checks.extend(check_article_totals(totals, currency))
-    overall = check_overall(totals, currency)
+    if unknown_by_document and overall_block is None:
+        overall_block = "UNKNOWN_ROW_KIND"
+    overall = check_overall(totals, currency, blocked_reason=overall_block)
     if overall is not None:
         checks.append(overall)
     return checks
