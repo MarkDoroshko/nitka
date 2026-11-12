@@ -1,0 +1,21 @@
+{
+  "manifest_version": "0.1.0",
+  "files": [
+    {
+      "file_id": "F-1",
+      "name": "report.xlsx",
+      "role": "REPORT",
+      "size_bytes": 4962,
+      "sha256": "9cfea08a815f2adcfc25c2f366800c2e183d7a836f5adaa59af6b1c652a000a9",
+      "relative_path": "inputs/F-1.xlsx"
+    },
+    {
+      "file_id": "F-2",
+      "name": "act.pdf",
+      "role": "SUPPORT",
+      "size_bytes": 25,
+      "sha256": "65186abeb94c76e4bd57f2c5f255599f6960fad3fb229eb36c6f913640f165c1",
+      "relative_path": "inputs/F-2.pdf"
+    }
+  ]
+}
