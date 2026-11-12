@@ -8,11 +8,13 @@ from typing import Final
 from nitka.contracts.analysis import AnalysisResult
 from nitka.contracts.extraction import ExtractionResult
 from nitka.contracts.inputs import InputManifest
+from nitka.contracts.profile import CaseProfile
 from nitka.contracts.revisions import AmountCorrection
 
 MANIFEST_NAME: Final[str] = "input_manifest.json"
 EXTRACTION_NAME: Final[str] = "extraction.json"
 ANALYSIS_NAME: Final[str] = "analysis.json"
+PROFILE_NAME: Final[str] = "case_profile.json"
 CORRECTION_NAME: Final[str] = "correction.json"
 INPUTS_DIR: Final[str] = "inputs"
 REVISIONS_DIR: Final[str] = "revisions"
@@ -57,6 +59,7 @@ class StoredRun:
     analysis: AnalysisResult
     inputs: Mapping[str, Path]
     history: tuple[AmountCorrection, ...] = ()
+    profile: CaseProfile | None = None
 
     @property
     def run_dir(self) -> Path:
@@ -65,3 +68,7 @@ class StoredRun:
     @property
     def revision_dir(self) -> Path:
         return self.run_dir / REVISIONS_DIR / str(self.revision)
+
+    @property
+    def profile_path(self) -> Path:
+        return self.run_dir / PROFILE_NAME

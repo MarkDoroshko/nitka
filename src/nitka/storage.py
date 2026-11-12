@@ -21,6 +21,7 @@ from pathlib import Path
 
 from nitka.analysis.matching import Matcher
 from nitka.contracts.analysis import AnalysisResult, Scope
+from nitka.contracts.profile import CaseProfile
 from nitka.extraction.limits import (
     DEFAULT_PACKAGE_LIMITS,
     PackageLimitError,
@@ -51,6 +52,7 @@ from ._storage_models import RunNotFoundError as RunNotFoundError
 from ._storage_models import StorageError as StorageError
 from ._storage_models import StoredRun as StoredRun
 from .run_repository import LocalRunRepository
+from .run_workflows import ProgressSink
 
 
 class LegacyReplayPolicy:
@@ -106,6 +108,8 @@ def run_and_save(
     run_id: str | None = None,
     revision: int = 1,
     limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
+    profile: CaseProfile | None = None,
+    progress: ProgressSink | None = None,
 ) -> AnalysisResult:
     """Snapshot inputs, run extraction/matching/analysis, publish the run."""
     PackageSizeGuard(limits).check(documents)
@@ -117,6 +121,9 @@ def run_and_save(
         matcher=matcher,
         run_id=run_id,
         revision=revision,
+        profile=profile,
+        limits=limits,
+        progress=progress,
     )
 
 

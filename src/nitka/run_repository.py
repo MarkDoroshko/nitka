@@ -26,8 +26,14 @@ from pathlib import Path
 from nitka.contracts.analysis import AnalysisResult
 from nitka.contracts.extraction import ExtractionResult
 from nitka.contracts.inputs import InputManifest, input_manifest_hash
+from nitka.contracts.profile import CaseProfile
 from nitka.contracts.revisions import AmountCorrection
 from nitka.corrections import correct_amount
+from nitka.extraction.limits import (
+    DEFAULT_PACKAGE_LIMITS,
+    PackageLimitError,
+    PackageLimits,
+)
 from nitka.extraction.ports import InputDocument
 from nitka.extraction.registry import InputRegistry
 
@@ -48,6 +54,7 @@ from ._storage_models import (
     CORRECTION_NAME,
     EXTRACTION_NAME,
     MANIFEST_NAME,
+    PROFILE_NAME,
     REVISIONS_DIR,
     CorruptRunError,
     RevisionConflictError,
@@ -65,6 +72,7 @@ class StagedRun:
     path: Path
     manifest: InputManifest
     documents: tuple[InputDocument, ...]
+    profile: CaseProfile | None
 
 
 class LocalRunRepository:
@@ -89,10 +97,14 @@ class LocalRunRepository:
         run_id: str,
         documents: Sequence[InputDocument],
         revision: int,
+        *,
+        profile: CaseProfile | None = None,
+        limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
     ) -> Iterator[StagedRun]:
         _validate_run_id(run_id)
         if revision < 1:
             raise StorageError("revision must be >= 1")
+        self._check_package_size(documents, limits)
         try:
             self.root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -119,6 +131,7 @@ class LocalRunRepository:
                     InputDocument(path=entry.path, role=entry.role, name=entry.name)
                     for entry in registry.inputs
                 ),
+                profile,
             )
         except StorageError:
             raise
@@ -140,6 +153,11 @@ class LocalRunRepository:
         self.write_json(
             staged.path / MANIFEST_NAME, staged.manifest.model_dump_json(indent=2)
         )
+        if staged.profile is not None:
+            self.write_json(
+                staged.path / PROFILE_NAME,
+                staged.profile.model_dump_json(indent=2),
+            )
         self.write_json(
             revision_dir / EXTRACTION_NAME, extraction.model_dump_json(indent=2)
         )
@@ -173,6 +191,10 @@ class LocalRunRepository:
         manifest = _read_model(run_dir / MANIFEST_NAME, InputManifest)
         extraction = _read_model(revision_dir / EXTRACTION_NAME, ExtractionResult)
         analysis = _read_model(revision_dir / ANALYSIS_NAME, AnalysisResult)
+        profile_path = run_dir / PROFILE_NAME
+        profile = (
+            _read_model(profile_path, CaseProfile) if profile_path.is_file() else None
+        )
 
         manifest_hash = input_manifest_hash(manifest.files)
         if analysis.input_manifest_hash != manifest_hash:
@@ -211,6 +233,7 @@ class LocalRunRepository:
             extraction=extraction,
             analysis=analysis,
             inputs=inputs,
+            profile=profile,
         )
 
     def load(self, run_id: str, revision: int = 1) -> StoredRun:
@@ -267,6 +290,23 @@ class LocalRunRepository:
             history.append(correction)
             cursor = parent
         return replace(stored, history=tuple(reversed(history)))
+
+    @staticmethod
+    def _check_package_size(
+        documents: Sequence[InputDocument], limits: PackageLimits
+    ) -> int:
+        total = 0
+        for document in documents:
+            try:
+                total += document.path.stat().st_size
+            except OSError:
+                continue
+        if total > limits.max_total_bytes:
+            raise PackageLimitError(
+                f"package size {total} bytes exceeds "
+                f"{limits.max_total_bytes} bytes"
+            )
+        return total
 
     def require_current_revision(self, stored: StoredRun) -> None:
         current = max(
@@ -330,4 +370,5 @@ class LocalRunRepository:
             analysis=analysis,
             inputs=stored.inputs,
             history=(*stored.history, correction),
+            profile=stored.profile,
         )

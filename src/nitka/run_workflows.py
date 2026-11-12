@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from uuid import uuid4
 
 from nitka.analysis.matching import Matcher
 from nitka.contracts.analysis import AnalysisResult, Scope
 from nitka.contracts.inputs import input_manifest_hash
+from nitka.contracts.profile import CaseProfile
 from nitka.contracts.revisions import AmountCorrection
 from nitka.contracts.validation import validate_extraction
 from nitka.corrections import correct_amount
+from nitka.extraction.limits import DEFAULT_PACKAGE_LIMITS, PackageLimits
 from nitka.extraction.ports import Extractor, InputDocument
 from nitka.pipeline import analyze_extraction
 
@@ -26,6 +29,51 @@ from ._storage_models import (
 from .run_repository import LocalRunRepository
 
 
+@dataclass(frozen=True)
+class ProgressEvent:
+    stage: str
+    message: str
+    current: int = 0
+    total: int = 0
+
+
+ProgressSink = Callable[[ProgressEvent], None]
+
+
+class WorkingInputPolicy:
+    """Only explicit REPORT/SUPPORT roles may enter extractor/matcher.
+
+    TECHNICAL/ORACLE materials (README, specification, answer key) are rejected
+    even when a filename looks like a normal primary document.
+    """
+
+    ALLOWED = frozenset({"REPORT", "SUPPORT"})
+
+    @classmethod
+    def validate(cls, documents: Sequence[InputDocument]) -> None:
+        rejected = [
+            document.name or document.path.name
+            for document in documents
+            if document.role not in cls.ALLOWED
+        ]
+        if rejected:
+            raise StorageError(
+                "non-working input roles are not allowed in a run: "
+                + ", ".join(sorted(rejected))
+            )
+
+
+def _emit(
+    progress: ProgressSink | None,
+    stage: str,
+    message: str,
+    current: int = 0,
+    total: int = 1,
+) -> None:
+    if progress is not None:
+        progress(ProgressEvent(stage, message, current, total))
+
+
 def run_and_save(
     repository: LocalRunRepository,
     documents: Sequence[InputDocument],
@@ -35,20 +83,36 @@ def run_and_save(
     matcher: Matcher,
     run_id: str | None = None,
     revision: int = 1,
+    profile: CaseProfile | None = None,
+    limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
+    progress: ProgressSink | None = None,
 ) -> AnalysisResult:
     """Analyze preserved inputs and publish a complete run."""
+    WorkingInputPolicy.validate(documents)
     run_id = run_id or str(uuid4())
-    with repository.stage_run(run_id, documents, revision) as staged:
+    _emit(progress, "SNAPSHOT", "Сохраняем входы", 0, 1)
+    with repository.stage_run(
+        run_id,
+        documents,
+        revision,
+        profile=profile,
+        limits=limits,
+    ) as staged:
         manifest = staged.manifest
         manifest_hash = input_manifest_hash(manifest.files)
+        _emit(progress, "EXTRACT", "Извлекаем документы", 0, 1)
         extraction = extractor(staged.documents)
+        _emit(progress, "EXTRACT", "Извлечение завершено", 1, 1)
         _bind_file_records(extraction, manifest)
         validate_extraction(extraction)
         if input_manifest_hash(extraction.files) != manifest_hash:
             raise StorageError(
                 "extractor file records do not match the input snapshot manifest"
             )
+        _emit(progress, "MATCH", "Сопоставляем операции", 0, 1)
         matches = matcher(extraction)
+        _emit(progress, "MATCH", "Сопоставление завершено", 1, 1)
+        _emit(progress, "ANALYZE", "Проверяем правила", 0, 1)
         analysis = analyze_extraction(
             extraction,
             matches,
@@ -59,8 +123,11 @@ def run_and_save(
         )
         if analysis.input_manifest_hash != manifest_hash:
             raise StorageError("analysis manifest hash does not match the snapshot")
+        _emit(progress, "ANALYZE", "Проверки завершены", 1, 1)
 
+        _emit(progress, "PUBLISH", "Публикуем запуск", 0, 1)
         repository.publish_run(staged, extraction, analysis)
+        _emit(progress, "PUBLISH", "Запуск сохранён", 1, 1)
     return analysis
 
 
