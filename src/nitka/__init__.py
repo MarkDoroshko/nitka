@@ -1,1 +1,1 @@
-"""Evidence-based document reconciliation."""
+"""Backend for evidence-based report reconciliation."""

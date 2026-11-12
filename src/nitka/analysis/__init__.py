@@ -1,1 +1,1 @@
-"""Matching and deterministic reconciliation rules."""
+"""Deterministic matching and reconciliation rules."""

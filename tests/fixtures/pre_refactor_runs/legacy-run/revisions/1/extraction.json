@@ -1,0 +1,147 @@
+{
+  "extraction_version": "test-package-1",
+  "files": [
+    {
+      "file_id": "F-1",
+      "name": "report.xlsx",
+      "sha256": "9cfea08a815f2adcfc25c2f366800c2e183d7a836f5adaa59af6b1c652a000a9",
+      "role": "REPORT",
+      "status": "COMPLETED",
+      "size_bytes": 4962
+    },
+    {
+      "file_id": "F-2",
+      "name": "act.pdf",
+      "sha256": "65186abeb94c76e4bd57f2c5f255599f6960fad3fb229eb36c6f913640f165c1",
+      "role": "SUPPORT",
+      "status": "COMPLETED",
+      "size_bytes": 25
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "S-F-1-Report-A2",
+      "file_id": "F-1",
+      "document_id": "D-F-1",
+      "location": {
+        "kind": "CELL",
+        "sheet": "Report",
+        "cell": "A2"
+      },
+      "method": "TABLE",
+      "raw_text": "0012",
+      "value": "0012",
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-F-1-Report-B2",
+      "file_id": "F-1",
+      "document_id": "D-F-1",
+      "location": {
+        "kind": "CELL",
+        "sheet": "Report",
+        "cell": "B2"
+      },
+      "method": "TABLE",
+      "raw_text": "Услуги",
+      "value": "Услуги",
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-F-1-Report-D2",
+      "file_id": "F-1",
+      "document_id": "D-F-1",
+      "location": {
+        "kind": "CELL",
+        "sheet": "Report",
+        "cell": "D2"
+      },
+      "method": "TABLE",
+      "raw_text": "150 000,00",
+      "value": "150000.00",
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-F-1-Report-A3",
+      "file_id": "F-1",
+      "document_id": "D-F-1",
+      "location": {
+        "kind": "CELL",
+        "sheet": "Report",
+        "cell": "A3"
+      },
+      "method": "TABLE",
+      "raw_text": null,
+      "value": null,
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-F-1-Report-B3",
+      "file_id": "F-1",
+      "document_id": "D-F-1",
+      "location": {
+        "kind": "CELL",
+        "sheet": "Report",
+        "cell": "B3"
+      },
+      "method": "TABLE",
+      "raw_text": "Итого",
+      "value": "Итого",
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-F-1-Report-D3",
+      "file_id": "F-1",
+      "document_id": "D-F-1",
+      "location": {
+        "kind": "CELL",
+        "sheet": "Report",
+        "cell": "D3"
+      },
+      "method": "TABLE",
+      "raw_text": "150000",
+      "value": "150000",
+      "review_status": "UNREVIEWED"
+    },
+    {
+      "source_id": "S-F-2-PAGE-1",
+      "file_id": "F-2",
+      "document_id": "D-F-2",
+      "location": {
+        "kind": "PAGE",
+        "page": 1
+      },
+      "method": "VISION",
+      "raw_text": "120 000,00",
+      "value": "120000.00",
+      "review_status": "UNREVIEWED"
+    }
+  ],
+  "rows": [
+    {
+      "row_id": "R-F-1-Report-2",
+      "kind": "ITEM",
+      "amount_source_id": "S-F-1-Report-D2",
+      "fields": {
+        "contract": "S-F-1-Report-A2",
+        "description": "S-F-1-Report-B2"
+      }
+    },
+    {
+      "row_id": "R-F-1-Report-3",
+      "kind": "DOCUMENT_TOTAL",
+      "amount_source_id": "S-F-1-Report-D3",
+      "fields": {
+        "contract": "S-F-1-Report-A3",
+        "description": "S-F-1-Report-B3"
+      }
+    },
+    {
+      "row_id": "A-1",
+      "kind": "ITEM",
+      "amount_source_id": "S-F-2-PAGE-1",
+      "fields": {}
+    }
+  ],
+  "issues": []
+}

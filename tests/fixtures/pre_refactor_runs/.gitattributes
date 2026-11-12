@@ -1,0 +1,2 @@
+# Input manifest hashes require byte-for-byte preservation on every platform.
+legacy-run/inputs/* -text
