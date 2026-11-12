@@ -66,6 +66,31 @@ _CONTRACT_BASIS = re.compile(
     re.IGNORECASE,
 )
 _PERIOD = re.compile(r"^(?:(?:отч[её]тный )?период)\s*:\s*(\S.*)$", re.IGNORECASE)
+_MONTH_FORMS = (
+    ("январь", "января"), ("февраль", "февраля"), ("март", "марта"),
+    ("апрель", "апреля"), ("май", "мая"), ("июнь", "июня"),
+    ("июль", "июля"), ("август", "августа"), ("сентябрь", "сентября"),
+    ("октябрь", "октября"), ("ноябрь", "ноября"), ("декабрь", "декабря"),
+)
+_MONTH_NUMBERS = {
+    form: month for month, forms in enumerate(_MONTH_FORMS, 1) for form in forms
+}
+_MONTH_NAMES = "|".join(_MONTH_NUMBERS)
+_MONTH_YEAR = (
+    rf"(?P<month>{_MONTH_NAMES})\s+(?P<year>[1-9]\d{{3}})\b"
+    r"(?:\s+(?:года\b|г\b\.?))?"
+)
+_LABELLED_MONTH = re.compile(rf"{_MONTH_YEAR}[.\s]*", re.IGNORECASE)
+_SERVICE_MONTH = re.compile(
+    rf"\bза\s+(?:период\s+)?{_MONTH_YEAR}", re.IGNORECASE
+)
+_PERIOD_CONTINUATION = re.compile(
+    rf"\s*(?:[-–—,]|\b(?:и|или|по)\b)\s*(?:{_MONTH_NAMES}|\d{{1,4}})\b",
+    re.IGNORECASE,
+)
+_DOCUMENT_REFERENCE = re.compile(
+    r"(?:^|\s)(?:см\.|согласно|на основании)\s", re.IGNORECASE
+)
 _PURPOSE = re.compile(
     r"^(?:содержание|описание|назначение)(?: работ| услуг)?\s*:\s*(.*)$", re.IGNORECASE
 )
@@ -349,6 +374,7 @@ def _issue(entry: RegisteredInput, code: str, detail: str) -> Issue:
 def _extract_fields(fragments: Sequence[SupportFragment]) -> dict[str, SupportField]:
     candidates: dict[str, list[_Candidate]] = {}
     purposes: list[_Candidate] = []
+    period_range = False
     seen_header = seen_amount = False
     for parts in _body_lines(fragments):
         text = " ".join(" ".join(part.text.split()) for part in parts)
@@ -369,7 +395,21 @@ def _extract_fields(fragments: Sequence[SupportFragment]) -> dict[str, SupportFi
                 _Candidate(contract["number"], parts)
             )
         if period := _PERIOD.fullmatch(text):
-            candidates.setdefault("period", []).append(_Candidate(period[1], parts))
+            literal = period[1].split(";", 1)[0].strip()
+            month = _LABELLED_MONTH.fullmatch(literal)
+            start = _LABELLED_MONTH.match(literal)
+            period_range |= bool(start and _PERIOD_CONTINUATION.match(literal, start.end()))
+            value = _service_month(month) if month else literal
+            candidates.setdefault("period", []).append(_Candidate(value, parts))
+        elif not heading and not _METADATA.match(text):
+            for clause in text.split(";"):
+                if _DOCUMENT_REFERENCE.search(clause):
+                    continue
+                for month in _SERVICE_MONTH.finditer(clause):
+                    period_range |= bool(_PERIOD_CONTINUATION.match(clause, month.end()))
+                    candidates.setdefault("period", []).append(
+                        _Candidate(_service_month(month), parts)
+                    )
         if amount := _AMOUNT_LABEL.fullmatch(text):
             seen_amount = True
             if value := _money(amount["amount"]):
@@ -404,6 +444,8 @@ def _extract_fields(fragments: Sequence[SupportFragment]) -> dict[str, SupportFi
     if table_amounts:
         candidates.setdefault("amount", []).extend(table_amounts)
     fields = {name: _select(name, values) for name, values in candidates.items()}
+    if period_range:
+        fields["period"] = SupportField(None, fields["period"].fragments, needs_review=True)
     if purpose_parts := purposes or table_purposes:
         fields["purpose"] = SupportField(
             " ".join(part.value for part in purpose_parts),
@@ -411,6 +453,10 @@ def _extract_fields(fragments: Sequence[SupportFragment]) -> dict[str, SupportFi
             any(_low_confidence(part.fragments) for part in purpose_parts),
         )
     return fields
+
+
+def _service_month(match: re.Match[str]) -> str:
+    return f"{match['year']}-{_MONTH_NUMBERS[match['month'].casefold()]:02}"
 
 
 def _body_lines(

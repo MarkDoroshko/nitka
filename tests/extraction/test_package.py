@@ -27,6 +27,7 @@ from nitka.extraction.ports import Extractor, InputDocument
 from nitka.extraction.registry import InputRegistry
 from nitka.extraction.support_documents import SupportDocument, SupportPageLocation
 from nitka.ocr import OcrBlock, OcrEngine, OcrError, OcrPage
+from nitka.ocr.engine import OcrProvenance
 
 
 class _UnavailableOcr:
@@ -119,6 +120,78 @@ def test_shared_profile_drives_article_matching(
     assert totals.report_total.amount == "42.00"
 
 
+def test_port_retains_fragments_and_ocr_provenance_after_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"synthetic report")
+    left = KfzFragment(1, OcrBlock(text="1", bbox=(10, 10, 20, 25), confidence=0.98))
+    right = KfzFragment(1, OcrBlock(text="234,00", bbox=(21, 10, 60, 25), confidence=0.91))
+    heading = KfzFragment(
+        1, OcrBlock(text="Статья 0200", bbox=(5, 1, 70, 8), confidence=0.99)
+    )
+    provenance = OcrProvenance(settings_version="test", model_sha256={"det": "a" * 64})
+    native = KfzResult(
+        KfzRow(3, 2026, (heading,), {"0200": KfzCell("1234.00", (left, right), (heading,))}),
+        {"contract": (left, KfzFragment(2, right.block))},
+        (provenance, provenance),
+    )
+    monkeypatch.setattr(PackageExtractor, "_read_kfz", lambda *_: native)
+    result = _extractor(tmp_path / "previews")([InputDocument(report, "REPORT")])
+    parsed = ExtractionResult.model_validate_json(result.model_dump_json())
+    (row,) = parsed.rows
+    sources = {source.source_id: source for source in parsed.sources}
+    amount = sources[row.amount_source_id]
+    assert amount.value == "1234.00" and amount.confidence == 0.91
+    assert amount.location == OcrLocation(kind="OCR", page=1, bbox=(10, 10, 60, 25))
+    assert sources[row.fields["evidence_0200_1"]].raw_text == "1"
+    assert sources[row.fields["evidence_0200_2"]].location == OcrLocation(
+        kind="OCR", page=1, bbox=right.block.bbox
+    )
+    assert sources[row.fields["evidence_0200_heading_1"]].raw_text == "Статья 0200"
+    assert sources[row.fields["evidence_contract_2"]].location == OcrLocation(
+        kind="OCR", page=2, bbox=right.block.bbox
+    )
+    assert sources[row.fields["contract"]].location == OcrLocation(kind="OCR", page=1)
+    profile = sources[row.fields["evidence_ocr_profile_2"]]
+    assert profile.value is not None
+    assert OcrProvenance.model_validate_json(profile.value) == provenance
+
+
+def test_conflicting_support_contract_stays_evidence_only(tmp_path: Path) -> None:
+    class Recognizer:
+        def recognize(self, image_path: Path) -> OcrPage:
+            lines = (
+                "Акт 123 от 28.06.2026",
+                "Договор 24/03/15-01",
+                "Договор 24/03/16-02",
+                "Административное сопровождение за июнь 2026 года.",
+                "Сумма: 165 000,00",
+            )
+            return OcrPage(
+                width=400, height=400,
+                blocks=tuple(
+                    OcrBlock(text=line, bbox=(10, 20*i, 350, 20*i+10), confidence=0.98)
+                    for i, line in enumerate(lines)
+                ),
+                reading_order=tuple(range(len(lines))),
+                provenance=OcrProvenance(settings_version="test", model_sha256={}),
+            )
+
+    scan = tmp_path / "support.png"
+    scan.write_bytes(b"synthetic scan")
+    extraction = PackageExtractor(
+        _case_profile(), ocr=Recognizer(), preview_dir=tmp_path
+    )([InputDocument(scan, "SUPPORT")])
+    (row,) = extraction.rows
+    sources = {source.source_id: source for source in extraction.sources}
+    assert "contract" not in row.fields
+    assert sources[row.fields["evidence_contract"]].review_status == "NEEDS_REVIEW"
+    assert sources[row.fields["evidence_contract_1"]].raw_text == "Договор 24/03/15-01"
+    assert sources[row.fields["evidence_contract_2"]].raw_text == "Договор 24/03/16-02"
+    assert sources[row.fields["service_period"]].value == "2026-06"
+
+
 def test_port_uses_stable_content_ids_and_explicit_roles(tmp_path: Path) -> None:
     first = _payroll(tmp_path / "one.xlsx")
     copy = Path(shutil.copyfile(first, tmp_path / "two.xlsx"))
@@ -164,6 +237,9 @@ def test_port_uses_stable_content_ids_and_explicit_roles(tmp_path: Path) -> None
         "52": 1,
     }
     for row in item_rows:
+        assert by_id[row.amount_source_id].location == CellLocation(
+            kind="CELL", sheet="Ведомость", cell="C6:C7"
+        )
         code = by_id[row.fields["article_code"]]
         assert code.value == "0200"
         for component, cell in (("0201", "A6"), ("0202", "A7")):
@@ -334,7 +410,9 @@ def test_local_case_with_real_ocr(tmp_path: Path) -> None:
         Path(__file__).resolve().parents[2] / "config" / "ocr" / "ppocr-v5.json"
     )
     engine = OcrEngine(Path(os.environ["NITKA_OCR_MODELS"]), model_manifest)
-    profile = _case_profile()
+    profile_path = os.environ.get("NITKA_PACKAGE_SMOKE_PROFILE")
+    assert profile_path, "Set NITKA_PACKAGE_SMOKE_PROFILE to the local case profile JSON"
+    profile = CaseProfile.model_validate_json(Path(profile_path).read_bytes())
     extractor = PackageExtractor(profile, ocr=engine, preview_dir=tmp_path)
     roles: tuple[FileRole, ...] = ("REPORT", "SUPPORT", "TECHNICAL")
     documents = [
@@ -355,6 +433,10 @@ def test_local_case_with_real_ocr(tmp_path: Path) -> None:
         item for item in original.evidence.values() if isinstance(item, KfzResult)
     )
     assert kfz.row is not None and kfz.row.cells["total"].value == "11580377.40"
+    assert {code: kfz.row.cells[code].value for code in profile.article_codes} == {
+        "0200": "5558474.83", "0300": "1671359.96",
+        "0800": "1145798.10", "0900": "3204744.51",
+    }
     assert kfz.row.cells["total"].fragments[0].block.bbox
     assert kfz.provenance[0].model_sha256
     sources = original.extraction.sources
@@ -382,6 +464,9 @@ def test_local_case_with_real_ocr(tmp_path: Path) -> None:
     support = [
         item for item in original.evidence.values() if isinstance(item, SupportDocument)
     ]
+    june = next(item for item in support if item.file.name.startswith("14_"))
+    assert june.fields["period"].value == "2026-06"
+    assert "июнь 2026" in june.fields["period"].fragments[0].text.casefold()
     assert {"270000.00", "703244.51", "650000.00"} <= {
         item.fields["amount"].value for item in support
     }

@@ -43,8 +43,10 @@ from nitka.extraction.support_documents import (
     SupportDocument,
     SupportDocumentsExtractor,
     SupportField,
+    SupportPageLocation,
 )
 from nitka.ocr import OcrError
+from nitka.ocr.engine import OcrProvenance
 
 DocumentEvidence = KfzResult | PayrollResult | SupportDocument
 SourceMethod = Literal["TABLE", "PDF_TEXT", "OCR", "DOCX"]
@@ -304,20 +306,33 @@ class _Projection:
             return "FAILED"
         return "PARTIAL" if self.issues else "COMPLETED"
 
+    def ocr_evidence(
+        self, fields: dict[str, str], page: int, provenance: OcrProvenance
+    ) -> None:
+        key = f"evidence_ocr_profile_{page}"
+        fields[key] = self.source(
+            key, OcrLocation(kind="OCR", page=page), "OCR",
+            None, provenance.model_dump_json(),
+        )
+
 
 def _project_kfz(
     result: KfzResult, projected: _Projection, article_codes: Sequence[str]
 ) -> FileStatus:
     for detail in result.issues:
         projected.issue("KFZ_EXTRACTION", detail)
-    fields = {
-        key: _kfz_source(projected, key, fragments, None)
-        for key, fragments in result.header.items()
-        if fragments
-    }
+    fields: dict[str, str] = {}
+    for key, fragments in result.header.items():
+        if fragments:
+            fields[key] = _kfz_source(projected, fields, key, fragments, None)
     if result.row is not None:
+        for detail in result.row.arithmetic_issues:
+            projected.issue("KFZ_ARITHMETIC_MISMATCH", detail)
+        for page, provenance in enumerate(result.provenance, start=1):
+            projected.ocr_evidence(fields, page, provenance)
         fields["fragment"] = _kfz_source(
             projected,
+            fields,
             "selected_row",
             result.row.label,
             None,
@@ -330,8 +345,9 @@ def _project_kfz(
             # the issue and headers for locating the cell in the selected row.
             if cell.fragments:
                 fields[key] = _kfz_source(
-                    projected, key, cell.fragments, cell.value, bool(cell.issue)
+                    projected, fields, key, cell.fragments, cell.value, bool(cell.issue)
                 )
+            _kfz_fragments(projected, fields, f"{key}_heading", cell.headings)
         total = fields.pop("total", None)
         if total is not None:
             projected.row("kfz-total", "DOCUMENT_TOTAL", total, fields)
@@ -341,7 +357,7 @@ def _project_kfz(
             if article_cell is None or not article_cell.headings:
                 continue
             article = _kfz_source(
-                projected, f"article-{code}", article_cell.headings, code
+                projected, fields, f"article-{code}", article_cell.headings, code
             )
             amount = fields.get(code)
             if amount is None:
@@ -359,20 +375,46 @@ def _project_kfz(
 
 def _kfz_source(
     projected: _Projection,
+    fields: dict[str, str],
     key: str,
     fragments: tuple[KfzFragment, ...],
     value: str | None,
     needs_review: bool = False,
 ) -> str:
+    page = fragments[0].page
+    if len(fragments) > 1:
+        _kfz_fragments(projected, fields, key, fragments)
+    bbox = None
+    if all(fragment.page == page for fragment in fragments):
+        boxes = [fragment.block.bbox for fragment in fragments]
+        bbox = (
+            min(box[0] for box in boxes), min(box[1] for box in boxes),
+            max(box[2] for box in boxes), max(box[3] for box in boxes),
+        )
     return projected.source(
         key,
-        OcrLocation(kind="OCR", page=fragments[0].page, bbox=fragments[0].block.bbox),
+        OcrLocation(kind="OCR", page=page, bbox=bbox),
         "OCR",
         " ".join(fragment.block.text for fragment in fragments),
         value,
         needs_review=needs_review,
         confidence=min(fragment.block.confidence for fragment in fragments),
     )
+
+
+def _kfz_fragments(
+    projected: _Projection,
+    fields: dict[str, str],
+    key: str,
+    fragments: Sequence[KfzFragment],
+) -> None:
+    for index, fragment in enumerate(fragments, start=1):
+        part = f"evidence_{key}_{index}"
+        fields[part] = projected.source(
+            part,
+            OcrLocation(kind="OCR", page=fragment.page, bbox=fragment.block.bbox),
+            "OCR", fragment.block.text, None, confidence=fragment.block.confidence,
+        )
 
 
 def _project_payroll(
@@ -443,6 +485,11 @@ def _project_payroll(
         )
     elif result.kind == "PAYROLL" and "0201" in result.amounts:
         anchor = result.amounts["0201"].location
+        other = result.amounts.get("0202")
+        if other is not None and other.location.sheet == anchor.sheet:
+            anchor = CellLocation(
+                kind="CELL", sheet=anchor.sheet, cell=f"{anchor.cell}:{other.location.cell}"
+            )
         amount = projected.source(
             "monthly_payroll",
             anchor,
@@ -485,16 +532,27 @@ def _project_support(result: SupportDocument, projected: _Projection) -> FileSta
         "date": "document_date",
         "period": "service_period",
     }
-    fields = {}
+    fields: dict[str, str] = {}
     amount = None
+    for page, provenance in result.ocr_provenance.items():
+        if result.fields:
+            projected.ocr_evidence(fields, page, provenance)
     for key, item in result.fields.items():
         if not item.fragments:
             continue
         source_id = _support_source(projected, key, item)
+        if len(item.fragments) > 1:
+            for index, fragment in enumerate(item.fragments, start=1):
+                part = f"evidence_{key}_{index}"
+                fields[part] = _support_source(
+                    projected, part, SupportField(None, (fragment,), item.needs_review)
+                )
         if key == "amount":
             amount = source_id
         elif item.value is not None:
             fields[aliases.get(key, key)] = source_id
+        else:
+            fields[f"evidence_{key}"] = source_id
     if amount is not None:
         fields["fragment"] = fields.get("purpose", amount)
         projected.row("primary", "ITEM", amount, fields)
@@ -515,7 +573,18 @@ def _support_source(projected: _Projection, key: str, item: SupportField) -> str
         )
         method = "DOCX"
     elif anchor.bbox is not None:
-        location = OcrLocation(kind="OCR", page=anchor.page, bbox=anchor.bbox)
+        boxes = [
+            part.location.bbox for part in item.fragments
+            if isinstance(part.location, SupportPageLocation)
+            and part.location.page == anchor.page and part.location.bbox is not None
+        ]
+        bbox = None
+        if len(boxes) == len(item.fragments):
+            bbox = (
+                min(box[0] for box in boxes), min(box[1] for box in boxes),
+                max(box[2] for box in boxes), max(box[3] for box in boxes),
+            )
+        location = OcrLocation(kind="OCR", page=anchor.page, bbox=bbox)
         method = "OCR"
     else:
         location = PageLocation(kind="PAGE", page=anchor.page)
@@ -527,5 +596,8 @@ def _support_source(projected: _Projection, key: str, item: SupportField) -> str
         "\n".join(fragment.text for fragment in item.fragments),
         item.value,
         needs_review=item.needs_review or item.value is None,
-        confidence=item.fragments[0].confidence,
+        confidence=min(
+            (part.confidence for part in item.fragments if part.confidence is not None),
+            default=None,
+        ),
     )

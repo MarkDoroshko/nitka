@@ -66,6 +66,7 @@ class KfzRow:
     year: int
     label: tuple[KfzFragment, ...]
     cells: dict[str, KfzCell]
+    arithmetic_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -265,7 +266,7 @@ def _read_rows(
                 key=_x,
             )
             cells[name] = _read_cell(values, headings[column], table, column, page)
-        rows.append(KfzRow(stage, year, _fragments(page, line), _check_totals(cells)))
+        rows.append(KfzRow(stage, year, _fragments(page, line), cells, _check_totals(cells)))
     return rows
 
 
@@ -305,7 +306,7 @@ def _require_review(cell: KfzCell, issue: str) -> KfzCell:
     return replace(cell, value=None, issue=issue)
 
 
-def _check_totals(cells: dict[str, KfzCell]) -> dict[str, KfzCell]:
+def _check_totals(cells: dict[str, KfzCell]) -> tuple[str, ...]:
     checks = (
         ("0200_payroll_total", "0200_base_pay", "0200_additional_pay"),
         ("0200", "0200_payroll_total", "0200_reserve"),
@@ -313,13 +314,16 @@ def _check_totals(cells: dict[str, KfzCell]) -> dict[str, KfzCell]:
         ("0300", "0300_contributions_total", "0300_reserve"),
         ("total", "materials", "0200", "0300", "0800", "0900"),
     )
-    checked = cells.copy()
+    issues = []
     for total, *parts in checks:
         values = [cells[key].value for key in (total, *parts)]
         if any(value is None for value in values):
             continue
         printed, *components = (Decimal(value) for value in values if value is not None)
-        if printed != sum(components):
-            for key in (total, *parts):
-                checked[key] = _require_review(cells[key], f"Printed values do not reconcile for {total}")
-    return checked
+        expected = sum(components)
+        if printed != expected:
+            issues.append(
+                f"{total}: printed {printed}, component sum {expected}, "
+                f"difference {printed - expected}"
+            )
+    return tuple(issues)

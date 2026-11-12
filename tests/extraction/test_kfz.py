@@ -129,14 +129,22 @@ def test_requires_matching_article_headings() -> None:
     assert row.cells["0200"].value == "2175200.50"
 
 
-def test_flags_plausible_numbers_when_printed_subtotal_disagrees() -> None:
+def test_preserves_printed_amounts_when_totals_disagree() -> None:
     values = list(_TARGET)
     values[4] = "2 001 000,00"
+    values[-1] = "2 218350,50"
     row = parse_kfz([_page(target=tuple(values))], stage=4, year=2028).row
     assert row is not None
-    assert row.cells["0200_base_pay"].review_status == "NEEDS_REVIEW"
-    assert row.cells["0200_base_pay"].fragments[0].block.text == "2 001 000,00"
-    assert row.cells["0200_reserve"].value == "75200.00"
+    assert row.cells["0200_base_pay"].review_status == "UNREVIEWED"
+    assert row.cells["0200_base_pay"].value == "2001000.00"
+    assert row.cells["0200_payroll_total"].value == "2100000.50"
+    assert row.cells["0200"].value == "2175200.50"
+    assert row.cells["0800"].value == "1250.00"
+    assert row.cells["total"].value == "2218350.50"
+    assert row.arithmetic_issues == (
+        "0200_payroll_total: printed 2100000.50, component sum 2101000.50, difference -1000.00",
+        "total: printed 2218350.50, component sum 2218250.50, difference 100.00",
+    )
 
 
 def test_reports_missing_and_ambiguous_target_rows() -> None:

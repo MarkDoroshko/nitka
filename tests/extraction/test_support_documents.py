@@ -230,6 +230,42 @@ def test_png_uses_explicit_amount_and_preserves_ambiguous_ocr_number(
     assert document.fields["number"].needs_review
 
 
+@pytest.mark.parametrize(
+    ("lines", "expected", "needs_review"),
+    [
+        (("Сопровождение за июнь 2026 года.",), "2026-06", False),
+        (("Период: июнь 2026", "Работы за июня 2026 г."), "2026-06", False),
+        (("Период: май 2026", "Работы за июнь 2026 года."), None, True),
+        (("Услуги за январь 2026 — март 2026.",), None, True),
+        (("Период: май 2026; см. акт за июнь 2026.",), "2026-05", False),
+        (("Работы по договору от 01.06.2026.",), None, False),
+    ],
+)
+def test_service_period_uses_literal_context_and_not_document_date(
+    tmp_path: Path, lines: tuple[str, ...], expected: str | None, needs_review: bool
+) -> None:
+    path = tmp_path / "arbitrary.png"
+    path.write_bytes(b"synthetic image")
+    ocr = _Ocr(_page(
+        "Акт № 124 от 03.07.2026",
+        "Договор 24/03/15-01",
+        "Административное сопровождение.",
+        "К оплате: 100,00",
+        *lines,
+    ))
+    (document,) = SupportDocumentsExtractor(
+        ocr, preview_dir=tmp_path
+    ).extract(_registry(path))
+    assert document.fields["date"].value == "2026-07-03"
+    if expected is None and not needs_review:
+        assert "period" not in document.fields
+    else:
+        period = document.fields["period"]
+        assert period.value == expected
+        assert period.needs_review == needs_review
+        assert tuple(part.text for part in period.fragments) == lines
+
+
 def test_conflicting_totals_keep_both_fragments(tmp_path: Path) -> None:
     path = tmp_path / "document.pdf"
     path.touch()
