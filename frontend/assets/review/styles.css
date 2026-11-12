@@ -1,0 +1,337 @@
+/* Экран разбора замечания. Стили ограничены классами .nr-* и .nitka-review. */
+
+.nitka-review {
+  --nr-paper: #fbfcf9;
+  --nr-ink: #17231f;
+  --nr-muted: #63706a;
+  --nr-line: #c9d4ce;
+  --nr-accent: #0d5c4b;
+  --nr-accent-soft: #e7efeb;
+  --nr-over: #a8462f;
+  --nr-over-soft: #f7e8e3;
+  --nr-under: #315f9c;
+  --nr-under-soft: #e8eef7;
+  --nr-wait: #94631b;
+  --nr-wait-soft: #f6eedc;
+  --nr-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --nr-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --nr-mono: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+  color: var(--nr-ink);
+  font-family: var(--nr-sans);
+}
+
+.nr-ledger-block {
+  background: var(--nr-paper);
+  border: 1px solid var(--nr-line);
+  border-left: 5px solid var(--nr-accent);
+  padding: 1.25rem 1.4rem 0;
+  margin: 0.35rem 0 1.3rem;
+}
+
+.nr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding-bottom: 1.1rem;
+}
+
+.nr-head__copy {
+  min-width: 0;
+}
+
+.nr-eyebrow {
+  margin: 0 0 0.35rem;
+  color: var(--nr-accent);
+  font-family: var(--nr-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+}
+
+.nr-title {
+  margin: 0;
+  font-family: var(--nr-serif);
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  font-weight: 600;
+  line-height: 1.14;
+  letter-spacing: -0.015em;
+  color: var(--nr-ink);
+}
+
+.nr-detail {
+  margin: 0.55rem 0 0;
+  color: var(--nr-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.nr-state {
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.nr-state--alert {
+  color: var(--nr-over);
+  background: var(--nr-over-soft);
+}
+
+.nr-state--ok {
+  color: var(--nr-accent);
+  background: var(--nr-accent-soft);
+}
+
+.nr-state--wait {
+  color: var(--nr-wait);
+  background: var(--nr-wait-soft);
+}
+
+.nr-ledger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.08fr);
+  border-top: 1px solid var(--nr-line);
+}
+
+.nr-amount {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-width: 0;
+  padding: 1rem 1.15rem 1.15rem 0;
+}
+
+.nr-amount + .nr-amount {
+  border-left: 1px solid var(--nr-line);
+  padding-left: 1.15rem;
+}
+
+.nr-amount__label {
+  color: var(--nr-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.nr-amount__value {
+  color: var(--nr-ink);
+  font-family: var(--nr-mono);
+  font-size: clamp(1.1rem, 1.9vw, 1.55rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.nr-amount--delta .nr-amount__value {
+  color: var(--nr-muted);
+}
+
+.nr-amount--over .nr-amount__value {
+  color: var(--nr-over);
+}
+
+.nr-amount--under .nr-amount__value {
+  color: var(--nr-under);
+}
+
+.nr-amount--zero .nr-amount__value {
+  color: var(--nr-accent);
+}
+
+.nr-amount__note {
+  color: var(--nr-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.nr-amount--delta .nr-amount__note {
+  max-width: 34ch;
+}
+
+.nr-pane-label {
+  margin: 0 0 0.4rem;
+  color: var(--nr-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.nr-doc {
+  background: var(--nr-paper);
+  border: 1px solid var(--nr-line);
+  margin: 0.2rem 0 0.9rem;
+  padding: 1rem 1.1rem 1.05rem;
+}
+
+.nr-doc__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--nr-line);
+}
+
+.nr-doc__kind {
+  color: var(--nr-ink);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.nr-doc__loc {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.nr-chip {
+  display: inline-block;
+  border: 1px solid var(--nr-line);
+  border-radius: 3px;
+  background: #fff;
+  padding: 0.16rem 0.42rem;
+  color: var(--nr-muted);
+  font-family: var(--nr-mono);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.nr-chip--strong {
+  border-color: var(--nr-accent);
+  color: var(--nr-accent);
+  background: var(--nr-accent-soft);
+  font-weight: 700;
+}
+
+.nr-cell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0;
+  margin: 0.95rem 0 0.85rem;
+  border: 1px solid var(--nr-line);
+  background: #fff;
+}
+
+.nr-cell__ref {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.2rem;
+  padding: 0.75rem 0.6rem;
+  border-right: 1px solid var(--nr-line);
+  background: var(--nr-accent-soft);
+  color: var(--nr-accent);
+  font-family: var(--nr-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.nr-cell__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  min-width: 0;
+  padding: 0.65rem 0.8rem;
+}
+
+.nr-cell__raw {
+  font-family: var(--nr-mono);
+  font-size: 1.1rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.nr-cell__norm,
+.nr-paper__norm {
+  color: var(--nr-muted);
+  font-family: var(--nr-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.nr-paper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0.95rem 0 0.85rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--nr-line);
+  background:
+    linear-gradient(90deg, rgba(13, 92, 75, 0.035) 0, rgba(13, 92, 75, 0.035) 1px, transparent 1px)
+      0 0 / 100% 1.8rem,
+    #fff;
+}
+
+.nr-paper__document {
+  color: var(--nr-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.nr-paper__quote {
+  margin: 0;
+  padding: 0.35rem 0 0.35rem 0.8rem;
+  border-left: 2px solid var(--nr-accent);
+  font-family: var(--nr-serif);
+  font-size: 1.12rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.nr-source__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  color: var(--nr-muted);
+  font-size: 0.73rem;
+  line-height: 1.35;
+}
+
+.nr-source__file {
+  color: var(--nr-ink);
+  font-weight: 600;
+}
+
+.nr-empty {
+  margin: 0.9rem 0 0.2rem;
+  color: var(--nr-muted);
+  font-size: 0.9rem;
+}
+
+.nr-doc--missing {
+  border-style: dashed;
+}
+
+@media (max-width: 760px) {
+  .nr-head {
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .nr-ledger {
+    grid-template-columns: 1fr;
+  }
+
+  .nr-amount {
+    padding: 0.8rem 0;
+  }
+
+  .nr-amount + .nr-amount {
+    border-left: 0;
+    border-top: 1px solid var(--nr-line);
+    padding-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nitka-review * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

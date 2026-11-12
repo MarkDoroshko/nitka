@@ -1,0 +1,162 @@
+{
+  "kit_id": "clean",
+  "title": "Чистый комплект",
+  "subtitle": "Все суммы подтверждены первичкой",
+  "description": "Два акта подтверждают обе строки отчёта. Обязательные проверки завершены, расхождений нет.",
+  "expected_label": "Расхождения не выявлены",
+  "expected_decision": "NO_DISCREPANCIES",
+  "tone": "success",
+  "tags": ["2 строки", "2 акта", "полный комплект"],
+  "report_name": "Отчёт_Ромашка_2026-10.xlsx",
+  "scope": {
+    "currency": "RUB",
+    "amount_basis": "GROSS",
+    "reporting_period": "2026-10"
+  },
+  "extraction": {
+    "extraction_version": "demo-2026-10-1",
+    "files": [
+      {
+        "file_id": "F-REPORT",
+        "name": "Отчёт_Ромашка_2026-10.xlsx",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "role": "REPORT",
+        "status": "COMPLETED"
+      },
+      {
+        "file_id": "F-ACT-14",
+        "name": "Акт_14_аренда.pdf",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "role": "SUPPORT",
+        "status": "COMPLETED"
+      },
+      {
+        "file_id": "F-ACT-15",
+        "name": "Акт_15_погрузка.pdf",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "role": "SUPPORT",
+        "status": "COMPLETED"
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "S-R-1",
+        "file_id": "F-REPORT",
+        "document_id": "D-REPORT",
+        "location": {"kind": "CELL", "sheet": "Report", "cell": "D5"},
+        "method": "TABLE",
+        "raw_text": "120 000,00",
+        "value": "120000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-R-2",
+        "file_id": "F-REPORT",
+        "document_id": "D-REPORT",
+        "location": {"kind": "CELL", "sheet": "Report", "cell": "D6"},
+        "method": "TABLE",
+        "raw_text": "48 000,00",
+        "value": "48000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-A-1",
+        "file_id": "F-ACT-14",
+        "document_id": "D-ACT-14",
+        "location": {"kind": "PAGE", "page": 1},
+        "method": "PDF_TEXT",
+        "raw_text": "120 000,00",
+        "value": "120000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-A-2",
+        "file_id": "F-ACT-15",
+        "document_id": "D-ACT-15",
+        "location": {"kind": "PAGE", "page": 1},
+        "method": "PDF_TEXT",
+        "raw_text": "48 000,00",
+        "value": "48000.00",
+        "review_status": "UNREVIEWED"
+      }
+    ],
+    "rows": [
+      {"row_id": "R-1", "kind": "ITEM", "amount_source_id": "S-R-1", "fields": {}},
+      {"row_id": "R-2", "kind": "ITEM", "amount_source_id": "S-R-2", "fields": {}},
+      {"row_id": "A-1", "kind": "ITEM", "amount_source_id": "S-A-1", "fields": {}},
+      {"row_id": "A-2", "kind": "ITEM", "amount_source_id": "S-A-2", "fields": {}}
+    ],
+    "issues": []
+  },
+  "matches": [
+    {
+      "match_id": "M-1",
+      "report_row_id": "R-1",
+      "support_row_ids": ["A-1"],
+      "state": "ACCEPTED"
+    },
+    {
+      "match_id": "M-2",
+      "report_row_id": "R-2",
+      "support_row_ids": ["A-2"],
+      "state": "ACCEPTED"
+    }
+  ],
+  "row_labels": {
+    "R-1": "Аренда склада, октябрь",
+    "R-2": "Погрузочно-разгрузочные работы",
+    "A-1": "Аренда склада по акту № 14",
+    "A-2": "Погрузка по акту № 15"
+  },
+  "documents": {
+    "D-REPORT": {
+      "title": "Отчёт о расходах ООО «Ромашка»",
+      "kind": "XLSX",
+      "file_id": "F-REPORT",
+      "pages": [
+        [
+          "ЛИСТ REPORT · октябрь 2026",
+          "Валюта: RUB · суммы с НДС",
+          "",
+          "5   Аренда склада, октябрь ......... 120 000,00",
+          "6   Погрузочно-разгрузочные работы . 48 000,00",
+          "    ИТОГО ........................... 168 000,00"
+        ]
+      ]
+    },
+    "D-ACT-14": {
+      "title": "Акт № 14 от 31.10.2026",
+      "kind": "PDF",
+      "file_id": "F-ACT-14",
+      "pages": [
+        [
+          "АКТ № 14 от 31.10.2026",
+          "Исполнитель: ООО «СкладСервис»",
+          "Заказчик: ООО «Ромашка»",
+          "Договор № 12-А",
+          "",
+          "Аренда склада, октябрь 2026",
+          "Сумма к оплате: 120 000,00 ₽",
+          "В том числе НДС 20%: 20 000,00 ₽"
+        ]
+      ]
+    },
+    "D-ACT-15": {
+      "title": "Акт № 15 от 31.10.2026",
+      "kind": "PDF",
+      "file_id": "F-ACT-15",
+      "pages": [
+        [
+          "АКТ № 15 от 31.10.2026",
+          "Исполнитель: ООО «СкладСервис»",
+          "Заказчик: ООО «Ромашка»",
+          "Договор № 12-А",
+          "",
+          "Погрузочно-разгрузочные работы",
+          "Сумма к оплате: 48 000,00 ₽",
+          "В том числе НДС 20%: 8 000,00 ₽"
+        ]
+      ]
+    }
+  }
+}
