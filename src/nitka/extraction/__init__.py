@@ -1,1 +1,1 @@
-"""Document extraction adapters."""
+"""Document adapters and normalization into ExtractionResult."""

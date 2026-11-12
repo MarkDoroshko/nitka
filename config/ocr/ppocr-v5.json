@@ -1,0 +1,9 @@
+{
+  "settings_version": "ppocr-v5-mobile-cyrillic-max2400-v1",
+  "model_sha256": {
+    "PP-OCRv5_mobile_det/inference.onnx": "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d",
+    "PP-OCRv5_mobile_det/inference.yml": "98069072e1b6b37d727fd9d9f11725faa46d6ea0de012f2ed26caea011c37699",
+    "cyrillic_PP-OCRv5_mobile_rec/inference.onnx": "5371ee1ddaa7983cc62d0818d99e982b6804638c85e4f960d59a574094e172e5",
+    "cyrillic_PP-OCRv5_mobile_rec/inference.yml": "5c76cc91fa98410178a09f498db10050d0ec1634a660053d3005ab7be581f501"
+  }
+}
