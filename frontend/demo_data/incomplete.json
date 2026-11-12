@@ -1,0 +1,220 @@
+{
+  "kit_id": "incomplete",
+  "title": "Неполный комплект",
+  "subtitle": "Часть сумм не подтверждена",
+  "description": "Одна строка подтверждена, по второй найдено два равнозначных акта, по третьей первички нет. Одна страница акта не распознана. Зелёный статус запрещён.",
+  "expected_label": "Требуется ручная проверка",
+  "expected_decision": "REVIEW_REQUIRED",
+  "tone": "warning",
+  "tags": ["3 строки", "2 акта", "неоднозначность"],
+  "report_name": "Отчёт_Ромашка_2026-10_неполный.xlsx",
+  "scope": {
+    "currency": "RUB",
+    "amount_basis": "GROSS",
+    "reporting_period": "2026-10"
+  },
+  "extraction": {
+    "extraction_version": "demo-2026-10-1",
+    "files": [
+      {
+        "file_id": "F-REPORT",
+        "name": "Отчёт_Ромашка_2026-10_неполный.xlsx",
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "role": "REPORT",
+        "status": "COMPLETED"
+      },
+      {
+        "file_id": "F-ACT-21",
+        "name": "Акт_21_аренда.pdf",
+        "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "role": "SUPPORT",
+        "status": "PARTIAL"
+      },
+      {
+        "file_id": "F-ACT-22",
+        "name": "Акт_22_клининг.pdf",
+        "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+        "role": "SUPPORT",
+        "status": "COMPLETED"
+      },
+      {
+        "file_id": "F-ACT-23",
+        "name": "Акт_22_клининг_копия.pdf",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "role": "SUPPORT",
+        "status": "COMPLETED"
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "S-R-1",
+        "file_id": "F-REPORT",
+        "document_id": "D-REPORT",
+        "location": {"kind": "CELL", "sheet": "Report", "cell": "D5"},
+        "method": "TABLE",
+        "raw_text": "96 000,00",
+        "value": "96000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-R-2",
+        "file_id": "F-REPORT",
+        "document_id": "D-REPORT",
+        "location": {"kind": "CELL", "sheet": "Report", "cell": "D6"},
+        "method": "TABLE",
+        "raw_text": "54 000,00",
+        "value": "54000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-R-3",
+        "file_id": "F-REPORT",
+        "document_id": "D-REPORT",
+        "location": {"kind": "CELL", "sheet": "Report", "cell": "D7"},
+        "method": "TABLE",
+        "raw_text": "27 000,00",
+        "value": "27000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-A-1",
+        "file_id": "F-ACT-21",
+        "document_id": "D-ACT-21",
+        "location": {"kind": "PAGE", "page": 1},
+        "method": "VISION",
+        "raw_text": "96 000,00",
+        "value": "96000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-A-2",
+        "file_id": "F-ACT-22",
+        "document_id": "D-ACT-22",
+        "location": {"kind": "PAGE", "page": 1},
+        "method": "PDF_TEXT",
+        "raw_text": "54 000,00",
+        "value": "54000.00",
+        "review_status": "UNREVIEWED"
+      },
+      {
+        "source_id": "S-A-3",
+        "file_id": "F-ACT-23",
+        "document_id": "D-ACT-23",
+        "location": {"kind": "PAGE", "page": 1},
+        "method": "VISION",
+        "raw_text": "54 000,00",
+        "value": "54000.00",
+        "review_status": "UNREVIEWED"
+      }
+    ],
+    "rows": [
+      {"row_id": "R-1", "kind": "ITEM", "amount_source_id": "S-R-1", "fields": {}},
+      {"row_id": "R-2", "kind": "ITEM", "amount_source_id": "S-R-2", "fields": {}},
+      {"row_id": "R-3", "kind": "ITEM", "amount_source_id": "S-R-3", "fields": {}},
+      {"row_id": "A-1", "kind": "ITEM", "amount_source_id": "S-A-1", "fields": {}},
+      {"row_id": "A-2", "kind": "ITEM", "amount_source_id": "S-A-2", "fields": {}},
+      {"row_id": "A-3", "kind": "ITEM", "amount_source_id": "S-A-3", "fields": {}}
+    ],
+    "issues": [
+      {
+        "code": "PAGE_UNREADABLE",
+        "file_id": "F-ACT-21",
+        "detail": "Страница 2 акта № 21 не распознана: скан повреждён. Итог по документу остаётся неподтверждённым."
+      }
+    ]
+  },
+  "matches": [
+    {
+      "match_id": "M-1",
+      "report_row_id": "R-1",
+      "support_row_ids": ["A-1"],
+      "state": "ACCEPTED"
+    },
+    {
+      "match_id": "M-2",
+      "report_row_id": "R-2",
+      "support_row_ids": ["A-2", "A-3"],
+      "state": "AMBIGUOUS"
+    }
+  ],
+  "row_labels": {
+    "R-1": "Аренда склада, октябрь",
+    "R-2": "Уборка территории",
+    "R-3": "Вывоз мусора",
+    "A-1": "Аренда по акту № 21",
+    "A-2": "Уборка по акту № 22",
+    "A-3": "Уборка по акту № 22 (копия)"
+  },
+  "documents": {
+    "D-REPORT": {
+      "title": "Отчёт о расходах ООО «Ромашка»",
+      "kind": "XLSX",
+      "file_id": "F-REPORT",
+      "pages": [
+        [
+          "ЛИСТ REPORT · октябрь 2026",
+          "Валюта: RUB · суммы с НДС",
+          "",
+          "5   Аренда склада, октябрь ......... 96 000,00",
+          "6   Уборка территории .............. 54 000,00",
+          "7   Вывоз мусора ................... 27 000,00",
+          "    ИТОГО ........................... 177 000,00"
+        ]
+      ]
+    },
+    "D-ACT-21": {
+      "title": "Акт № 21 от 31.10.2026",
+      "kind": "PDF",
+      "file_id": "F-ACT-21",
+      "pages": [
+        [
+          "АКТ № 21 от 31.10.2026",
+          "Исполнитель: ООО «СкладСервис»",
+          "Заказчик: ООО «Ромашка»",
+          "Договор № 12-А",
+          "",
+          "Аренда склада, октябрь 2026",
+          "Сумма к оплате: 96 000,00 ₽"
+        ],
+        [
+          "АКТ № 21 · лист 2",
+          "СКАН ПОВРЕЖДЁН",
+          "Итоговая сумма не распознана.",
+          "Требуется ручная проверка документа."
+        ]
+      ]
+    },
+    "D-ACT-22": {
+      "title": "Акт № 22 от 31.10.2026",
+      "kind": "PDF",
+      "file_id": "F-ACT-22",
+      "pages": [
+        [
+          "АКТ № 22 от 31.10.2026",
+          "Исполнитель: ООО «Чистый двор»",
+          "Заказчик: ООО «Ромашка»",
+          "Договор № 18-У",
+          "",
+          "Уборка территории, октябрь 2026",
+          "Сумма к оплате: 54 000,00 ₽"
+        ]
+      ]
+    },
+    "D-ACT-23": {
+      "title": "Акт № 22 от 31.10.2026 (копия)",
+      "kind": "PDF",
+      "file_id": "F-ACT-23",
+      "pages": [
+        [
+          "АКТ № 22 от 31.10.2026 · копия",
+          "Исполнитель: ООО «Чистый двор»",
+          "Заказчик: ООО «Ромашка»",
+          "Договор № 18-У",
+          "",
+          "Уборка территории, октябрь 2026",
+          "Сумма к оплате: 54 000,00 ₽"
+        ]
+      ]
+    }
+  }
+}
