@@ -78,12 +78,22 @@ class Issue(Contract):
     detail: str
 
 
+class OcrProvenance(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    settings_version: str
+    model_sha256: dict[str, str]
+
+
 class ExtractionResult(Contract):
     extraction_version: str
     files: list[FileRecord]
     sources: list[Source]
     rows: list[ExtractedRow]
     issues: list[Issue] = Field(default_factory=list)
+    ocr_provenance: dict[str, dict[Annotated[int, Field(ge=1)], OcrProvenance]] = Field(
+        default_factory=dict
+    )
 
     @classmethod
     def model_validate_json(

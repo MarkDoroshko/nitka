@@ -1,16 +1,17 @@
-"""Match support operations to KFZ article rows without using amounts.
+"""Match support operations to KFZ article rows by document evidence.
 
 The matcher is deliberately conservative: an operation is linked only when its
 article classification, contract and service period are unambiguous. Duplicate
 operations are counted once by business identity (not file hash), while
 excluded documents carry their own diagnostics separate from accepted Match.
+Amounts distinguish duplicate copies from conflicting records of one operation.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol, Sequence
 
@@ -23,6 +24,8 @@ from nitka.analysis.classification import (
     operation_key,
 )
 from nitka.contracts.analysis import ExcludedDocument, Match
+from nitka.contracts.analysis import MatchOutcome as MatchOutcome
+from nitka.contracts.analysis import SupportOperation as SupportOperation
 from nitka.contracts.extraction import ExtractionResult, Issue, Source
 from nitka.contracts.profile import CaseProfile, normalize_contract
 from nitka.contracts.report_scope import REPORT_SCOPE_UNVERIFIED, report_scope_issues
@@ -33,42 +36,12 @@ class Matcher(Protocol):
 
 
 @dataclass(frozen=True)
-class SupportOperation:
-    row_id: str
-    file_id: str
-    document_id: str
-    amount_source_id: str
-    source_ids: tuple[str, ...]
-    amount: str | None
-    contract: str | None
-    service_period: str | None
-    document_date: str | None
-    document_number: str | None
-    operation_id: str | None
-    description: str | None
-    article_code: str | None
-    classification_basis: str | None
-    fragment: str | None
-    period_present: bool = False
-
-
-@dataclass(frozen=True)
 class ReportArticleRow:
     row_id: str
     file_id: str
     document_id: str
     article_code: str | None
     source_ids: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class MatchOutcome:
-    matches: tuple[Match, ...]
-    excluded_documents: tuple[ExcludedDocument, ...]
-    ambiguous_operations: tuple[SupportOperation, ...]
-    required_articles: tuple[str, ...] = ()
-    blocked_articles: dict[str, str] = field(default_factory=dict)
-    issues: tuple[Issue, ...] = ()
 
 
 @dataclass(frozen=True)

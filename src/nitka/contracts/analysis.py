@@ -1,8 +1,10 @@
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Annotated, Literal
 
 from pydantic import Field
 
 from nitka.contracts.extraction import Amount, Contract, FileRecord, Issue, Source
+from nitka.contracts.profile import CaseProfile
 
 
 class Scope(Contract):
@@ -66,6 +68,50 @@ class ExcludedDocument(Contract):
     source_ids: list[str] = Field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SupportOperation:
+    row_id: str
+    file_id: str
+    document_id: str
+    amount_source_id: str
+    source_ids: tuple[str, ...]
+    amount: str | None
+    contract: str | None
+    service_period: str | None
+    document_date: str | None
+    document_number: str | None
+    operation_id: str | None
+    description: str | None
+    article_code: str | None
+    classification_basis: str | None
+    fragment: str | None
+    period_present: bool = False
+
+
+@dataclass(frozen=True)
+class MatchOutcome:
+    matches: tuple[Match, ...]
+    excluded_documents: tuple[ExcludedDocument, ...]
+    ambiguous_operations: tuple[SupportOperation, ...]
+    required_articles: tuple[str, ...] = ()
+    blocked_articles: dict[str, str] = field(default_factory=dict)
+    issues: tuple[Issue, ...] = ()
+
+
+class StaticMatching(Contract):
+    kind: Literal["STATIC"] = "STATIC"
+
+
+class CaseMatching(Contract):
+    kind: Literal["CASE"] = "CASE"
+    matcher_version: str
+    profile: CaseProfile
+    outcome: MatchOutcome
+
+
+MatchingContext = Annotated[StaticMatching | CaseMatching, Field(discriminator="kind")]
+
+
 class Coverage(Contract):
     report_rows: int
     checked_rows: int
@@ -92,3 +138,4 @@ class AnalysisResult(Contract):
     checks: list[Check]
     issues: list[Issue]
     excluded_documents: list[ExcludedDocument] = Field(default_factory=list)
+    matching_context: MatchingContext | None = None

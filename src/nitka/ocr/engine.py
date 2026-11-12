@@ -11,6 +11,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from nitka.contracts.extraction import OcrProvenance as OcrProvenance
+
 CPU_THREADS = 2
 BoundingBox = tuple[int, int, int, int]
 
@@ -21,13 +23,6 @@ class OcrBlock(BaseModel):
     bbox: BoundingBox
     text: str
     confidence: Annotated[float, Field(ge=0, le=1)]
-
-
-class OcrProvenance(BaseModel):
-    model_config = ConfigDict(frozen=True, strict=True)
-
-    settings_version: str
-    model_sha256: dict[str, str]
 
 
 class OcrPage(BaseModel):

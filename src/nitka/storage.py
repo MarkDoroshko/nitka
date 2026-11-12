@@ -26,6 +26,7 @@ from nitka.extraction.limits import (
     PackageLimitError,
     PackageLimits,
 )
+from nitka.extraction.package import PackageExtractor
 from nitka.extraction.ports import Extractor, InputDocument
 from nitka.pipeline import RULES_VERSION
 
@@ -50,6 +51,7 @@ from ._storage_models import RunExistsError as RunExistsError
 from ._storage_models import RunNotFoundError as RunNotFoundError
 from ._storage_models import StorageError as StorageError
 from ._storage_models import StoredRun as StoredRun
+from ._stored_analysis import replay_stored
 from .run_repository import LocalRunRepository
 
 
@@ -60,12 +62,14 @@ class LegacyReplayPolicy:
     as published. It is never silently recomputed with the current rules.
     """
 
-    READ_ONLY_RULES: frozenset[str] = frozenset({"amount-only-1", "amount-and-totals-2"})
+    READ_ONLY_RULES: frozenset[str] = frozenset(
+        {"amount-only-1", "amount-and-totals-2", "amount-and-totals-3"}
+    )
 
     def replay(self, stored: StoredRun, rules_version: str) -> AnalysisResult:
         if stored.analysis.rules_version in self.READ_ONLY_RULES:
             return stored.analysis
-        return run_workflows.replay_stored(stored, rules_version)
+        return replay_stored(stored, rules_version)
 
 
 class PackageSizeGuard:
@@ -108,7 +112,8 @@ def run_and_save(
     limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
 ) -> AnalysisResult:
     """Snapshot inputs, run extraction/matching/analysis, publish the run."""
-    PackageSizeGuard(limits).check(documents)
+    if not isinstance(extractor, PackageExtractor):
+        PackageSizeGuard(limits).check(documents)
     return run_workflows.run_and_save(
         _repository(root),
         documents,
@@ -117,6 +122,7 @@ def run_and_save(
         matcher=matcher,
         run_id=run_id,
         revision=revision,
+        limits=limits,
     )
 
 

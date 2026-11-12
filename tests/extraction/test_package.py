@@ -25,12 +25,14 @@ from nitka.extraction.kfz import KfzCell, KfzFragment, KfzResult, KfzRow
 from nitka.extraction.limits import PackageLimitError, PackageLimits
 from nitka.extraction.package import PackageExtractor
 from nitka.extraction.payroll import PayrollResult, extract_payroll
+from nitka.extraction.pdf import PdfInspector, PdfRenderResult
 from nitka.extraction.ports import Extractor, InputDocument
 from nitka.extraction.registry import InputRegistry
 from nitka.extraction.support_documents import SupportDocument, SupportPageLocation
 from nitka.ocr import OcrBlock, OcrEngine, OcrError, OcrPage
 from nitka.ocr.engine import OcrProvenance
-from nitka.pipeline import analyze_extraction
+from nitka.pipeline import analyze_extraction, run_pipeline
+from nitka.storage import load_run, replay_run, run_and_save
 
 
 class _UnavailableOcr:
@@ -246,6 +248,86 @@ def test_unreadable_second_report_is_not_silently_dropped(tmp_path: Path) -> Non
         and "1 of 2 submitted reports" in issue.detail
         for issue in extraction.issues
     )
+
+
+def test_saved_package_preserves_partial_ocr_and_input_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provenance = OcrProvenance(settings_version="test", model_sha256={"det": "a" * 64})
+
+    class Recognizer:
+        def recognize(self, image_path: Path) -> OcrPage:
+            if image_path.name == "page-2.png":
+                raise OcrError("OCR_TIMEOUT", "Second page timed out")
+            return OcrPage(width=100, height=100, blocks=(), reading_order=(), provenance=provenance)
+
+    pages = PdfRenderResult((tmp_path / "page-1.png", tmp_path / "page-2.png"))
+    monkeypatch.setattr(PdfInspector, "render", lambda *args, **kwargs: pages)
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"synthetic report")
+    support = tmp_path / "blank.png"
+    support.write_bytes(b"synthetic scan")
+    unsupported = tmp_path / "copy.abcdefghijkl"
+    shutil.copyfile(support, unsupported)
+    profile = _case_profile()
+    extractor = PackageExtractor(profile, ocr=Recognizer(), preview_dir=tmp_path / "previews")
+    documents = [
+        InputDocument(report, "REPORT"),
+        InputDocument(support, "SUPPORT"),
+        InputDocument(unsupported, "SUPPORT"),
+        InputDocument(tmp_path / "missing.pdf", "REPORT"),
+        InputDocument(tmp_path / "ignored.pdf", "TECHNICAL"),
+    ]
+    matcher = CaseMatcher(profile)
+    scope = Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05")
+    direct = run_pipeline(documents, scope, extractor=extractor, matcher=matcher)
+    root = tmp_path / "runs"
+    result = run_and_save(
+        root, documents, scope, extractor=extractor, matcher=matcher, run_id="case"
+    )
+    stored = load_run(root, "case")
+    assert stored.analysis == result == direct.model_copy(update={"run_id": "case"})
+    assert replay_run(root, "case") == result
+    assert len(stored.inputs) == 3
+    assert {file.name for file in result.files} == {report.name, support.name, unsupported.name}
+    assert all(file.status == "FAILED" for file in result.files)
+    assert not stored.extraction.sources
+    assert stored.extraction.ocr_provenance == {
+        file.file_id: {1: provenance} for file in result.files if file.name != unsupported.name
+    }
+    assert {issue.code for issue in result.issues} >= {
+        "INPUT_UNREADABLE", "REPORT_SCOPE_UNVERIFIED", "KFZ_EXTRACTION",
+        "SUPPORT_TEXT_MISSING", "UNSUPPORTED_INPUT", "DUPLICATE_INPUT",
+    }
+
+
+@pytest.mark.parametrize("guard", ["public", "extractor", "profile"])
+def test_saved_package_rejects_invalid_configuration_before_snapshot(
+    tmp_path: Path, guard: str
+) -> None:
+    profile = _case_profile()
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"x" * 10)
+    strict = PackageLimits(max_total_bytes=5)
+    extractor = PackageExtractor(
+        profile, ocr=_UnavailableOcr(), preview_dir=tmp_path / "previews",
+        limits=strict if guard == "extractor" else PackageLimits(),
+    )
+    matcher = CaseMatcher(
+        profile.model_copy(update={"contract": "other"}) if guard == "profile" else profile
+    )
+    root = tmp_path / "runs"
+    expected = ValueError if guard == "profile" else PackageLimitError
+    with pytest.raises(expected):
+        run_and_save(
+            root,
+            [InputDocument(report, "REPORT")],
+            Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05"),
+            extractor=extractor,
+            matcher=matcher,
+            limits=strict if guard == "public" else PackageLimits(),
+        )
+    assert not root.exists()
 
 
 def test_conflicting_support_contract_stays_evidence_only(tmp_path: Path) -> None:

@@ -21,6 +21,7 @@ from nitka.contracts.extraction import (
     FileStatus,
     Issue,
     OcrLocation,
+    OcrProvenance,
     PageLocation,
     Source,
 )
@@ -50,8 +51,7 @@ from nitka.extraction.support_documents import (
     SupportField,
     SupportPageLocation,
 )
-from nitka.ocr import OcrError
-from nitka.ocr.engine import OcrProvenance
+from nitka.ocr import OcrError, OcrPage
 
 DocumentEvidence = KfzResult | PayrollResult | SupportDocument
 SourceMethod = Literal["TABLE", "PDF_TEXT", "OCR", "DOCX"]
@@ -87,7 +87,7 @@ class PackageExtractor:
         limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
     ) -> None:
         self._ocr = ocr
-        self._profile = profile
+        self._profile = profile.model_copy(deep=True)
         self._preview_dir = _preview_path(preview_dir)
         self._limits = limits
         self._pdf = PdfInspector(limits.pdf_timeout_seconds)
@@ -95,8 +95,18 @@ class PackageExtractor:
     def __call__(self, documents: Sequence[InputDocument], /) -> ExtractionResult:
         return self.extract_package(documents).extraction
 
+    @property
+    def profile(self) -> CaseProfile:
+        return self._profile.model_copy(deep=True)
+
     def extract_package(self, documents: Sequence[InputDocument]) -> PackageExtraction:
         """Register the working inputs once and keep failures local to each file."""
+        registry, issues = self.register_inputs(documents)
+        return self.extract_registered(registry, issues=issues)
+
+    def register_inputs(
+        self, documents: Sequence[InputDocument]
+    ) -> tuple[InputRegistry, list[Issue]]:
         accepted = [
             document for document in documents if self._is_working(document.role)
         ]
@@ -109,14 +119,17 @@ class PackageExtractor:
                 code=REPORT_SCOPE_UNVERIFIED,
                 detail=f"Could read only {readable_reports} of {submitted_reports} submitted reports",
             ))
-        return self._extract_registered(registry, issues)
+        enforce_package_size(registry.inputs, self._limits)
+        return registry, issues
 
-    def extract_registered(self, registry: InputRegistry) -> PackageExtraction:
+    def extract_registered(
+        self, registry: InputRegistry, *, issues: Sequence[Issue] = ()
+    ) -> PackageExtraction:
         """Use a caller-owned registry, preserving its file IDs and manifest."""
         working = [entry for entry in registry.inputs if self._is_working(entry.role)]
         if len(working) != len(registry.inputs):
             registry = InputRegistry(working)
-        return self._extract_registered(registry, [])
+        return self._extract_registered(registry, list(issues))
 
     def _is_working(self, role: FileRole) -> bool:
         return role in ("REPORT", "SUPPORT") and self._profile.is_working_role(role)
@@ -202,7 +215,7 @@ class PackageExtractor:
                 status = _project_kfz(kfz, projected, self._profile.article_codes)
             else:
                 projected.issue(
-                    "UNSUPPORTED_INPUT", f"Unsupported {entry.role} format: {suffix}"
+                    "UNSUPPORTED_INPUT", f"Unsupported {entry.role} file: {entry.name}"
                 )
                 status = "FAILED"
 
@@ -227,6 +240,11 @@ class PackageExtractor:
             sources=sources,
             rows=rows,
             issues=issues,
+            ocr_provenance={
+                file_id: provenance
+                for file_id, item in evidence.items()
+                if (provenance := _page_provenance(item))
+            },
         )
         validate_extraction(extraction)
         if any(file.role == "REPORT" for file in extraction.files):
@@ -241,10 +259,12 @@ class PackageExtractor:
             return KfzResult(
                 None, {}, (), (rendered.error or "KFZ PDF has no rendered pages",)
             )
+        pages: list[OcrPage] = []
         try:
-            pages = [self._ocr.recognize(path) for path in rendered.pages]
+            for path in rendered.pages:
+                pages.append(self._ocr.recognize(path))
         except OcrError as exc:
-            return KfzResult(None, {}, (), (str(exc),))
+            return KfzResult(None, {}, tuple(page.provenance for page in pages), (str(exc),))
         return parse_kfz(
             pages, stage=self._profile.target_stage, year=self._profile.target_year
         )
@@ -261,6 +281,14 @@ def _preview_path(path: Path) -> Path:
     if absolute.startswith("\\\\"):
         return Path("\\\\?\\UNC\\" + absolute[2:])
     return Path("\\\\?\\" + absolute)
+
+
+def _page_provenance(evidence: DocumentEvidence) -> dict[int, OcrProvenance]:
+    if isinstance(evidence, KfzResult):
+        return dict(enumerate(evidence.provenance, start=1))
+    if isinstance(evidence, SupportDocument):
+        return evidence.ocr_provenance
+    return {}
 
 
 @dataclass
@@ -342,8 +370,9 @@ def _project_kfz(
             fields[key] = _kfz_source(
                 projected, fields, key, fragments, value, needs_review=issue is not None
             )
-    for page, provenance in enumerate(result.provenance, start=1):
-        projected.ocr_evidence(fields, page, provenance)
+    if fields or result.row is not None:
+        for page, provenance in enumerate(result.provenance, start=1):
+            projected.ocr_evidence(fields, page, provenance)
     if result.row is not None:
         for detail in result.row.arithmetic_issues:
             projected.issue("KFZ_ARITHMETIC_MISMATCH", detail)

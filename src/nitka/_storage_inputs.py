@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 from collections.abc import Sequence
 from pathlib import Path
 
 from nitka.contracts.extraction import ExtractionResult, FileRecord
 from nitka.contracts.inputs import InputManifest, ManifestFile
-from nitka.extraction.registry import InputRegistry
+from nitka.extraction.registry import InputReadError, InputRegistry
 
 from ._storage_files import _resolve_relative, _safe_suffix, _validate_component
 from ._storage_models import INPUTS_DIR, CorruptRunError, StorageError
@@ -17,11 +16,14 @@ def _snapshot_inputs(originals: InputRegistry, temporary: Path) -> InputManifest
     inputs_dir = temporary / INPUTS_DIR
     inputs_dir.mkdir()
     files: list[ManifestFile] = []
-    for entry in originals.inputs:
+    for index, entry in enumerate(originals.inputs, start=1):
         _validate_component(entry.file_id, "file_id")
-        filename = f"{entry.file_id}{_safe_suffix(entry.path)}"
+        filename = f"F-{index}{_safe_suffix(entry.path)}"
         destination = inputs_dir / filename
-        _copy_verified(entry.path, destination, entry.size_bytes, entry.sha256)
+        try:
+            entry.snapshot(destination)
+        except InputReadError as exc:
+            raise StorageError(f"cannot snapshot input: {exc}") from exc
         files.append(
             ManifestFile(
                 file_id=entry.file_id,
@@ -32,7 +34,6 @@ def _snapshot_inputs(originals: InputRegistry, temporary: Path) -> InputManifest
                 relative_path=Path(INPUTS_DIR, filename).as_posix(),
             )
         )
-    files.sort(key=lambda file: file.file_id)
     return InputManifest(files=files)
 
 
@@ -53,20 +54,6 @@ def _bind_file_records(extraction: ExtractionResult, manifest: InputManifest) ->
         record.name = file.name
         record.role = file.role
         record.size_bytes = file.size_bytes
-
-
-def _copy_verified(
-    source: Path, destination: Path, size_bytes: int, sha256: str
-) -> None:
-    try:
-        shutil.copyfile(source, destination)
-        data = destination.read_bytes()
-    except OSError as exc:
-        raise StorageError(f"cannot snapshot input {source.name!r}: {exc}") from exc
-    if len(data) != size_bytes or hashlib.sha256(data).hexdigest() != sha256:
-        raise StorageError(
-            f"input {source.name!r} changed while it was being snapshotted"
-        )
 
 
 def _verify_inputs(run_dir: Path, manifest: InputManifest) -> dict[str, Path]:

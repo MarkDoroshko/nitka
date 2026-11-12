@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 
 from nitka.analysis.matching import CaseMatcher
-from nitka.contracts.analysis import AnalysisResult, Scope
-from nitka.contracts.extraction import FileRole
+from nitka.contracts.analysis import CaseMatching, Scope
+from nitka.contracts.extraction import FileRole, OcrProvenance
 from nitka.contracts.profile import CaseProfile
 from nitka.extraction.package import PackageExtractor
 from nitka.extraction.ports import InputDocument
 from nitka.ocr import OcrEngine
-from nitka.pipeline import run_pipeline
+from nitka.storage import load_run, replay_run, run_and_save
 
 
 def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
@@ -31,14 +31,26 @@ def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
     ]
     report = next(document.path for document in documents if document.role == "REPORT")
     documents.extend([InputDocument(report, "TECHNICAL"), InputDocument(report, "ORACLE")])
-    result = run_pipeline(
+    root = tmp_path / "runs"
+    result = run_and_save(
+        root,
         documents,
         Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05"),
         extractor=PackageExtractor(profile, ocr=engine, preview_dir=tmp_path),
         matcher=CaseMatcher(profile),
     )
-    loaded = AnalysisResult.model_validate_json(result.model_dump_json())
+    stored = load_run(root, result.run_id)
+    loaded = stored.analysis
+    assert loaded == result == replay_run(root, result.run_id)
+    context = loaded.matching_context
+    assert isinstance(context, CaseMatching) and context.profile == profile
+    assert context.outcome == CaseMatcher(profile).match(stored.extraction)
+    assert len(stored.inputs) == 23
     files = {file.file_id: file for file in loaded.files}
+    ocr_pages = stored.extraction.ocr_provenance
+    assert {files[file_id].name[:2] for file_id in ocr_pages} == {"01", "04", "08", "12", "15"}
+    expected_provenance = OcrProvenance.model_validate_json(manifest.read_bytes())
+    assert all(pages == {1: expected_provenance} for pages in ocr_pages.values())
     assert len(files) == 23
     assert all(file.role in {"REPORT", "SUPPORT"} and file.status != "FAILED" for file in files.values())
     assert loaded.decision == "DISCREPANCIES_FOUND"

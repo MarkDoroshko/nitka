@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,7 +10,7 @@ import pytest
 
 from nitka.analysis.classification import ArticleClassification, DocumentClassifier
 from nitka.analysis.matching import CaseMatcher
-from nitka.contracts.analysis import Scope
+from nitka.contracts.analysis import CaseMatching, Scope
 from nitka.contracts.extraction import (
     ExtractedRow,
     ExtractionResult,
@@ -17,7 +19,18 @@ from nitka.contracts.extraction import (
     Source,
 )
 from nitka.contracts.profile import CaseProfile
+from nitka.extraction.ports import Extractor, InputDocument
+from nitka.extraction.registry import InputRegistry
 from nitka.pipeline import run_pipeline
+from nitka.storage import (
+    CorruptRunError,
+    IncompatibleRulesError,
+    RevisionConflictError,
+    correct_run_amount,
+    load_run,
+    replay_run,
+    run_and_save,
+)
 
 PROFILE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "case_contract.json"
 
@@ -260,6 +273,134 @@ def _standard_extraction(
         )
     )
     return builder.build(), profile
+
+
+def _file_backed_case(tmp_path: Path) -> tuple[list[InputDocument], Extractor, CaseProfile]:
+    template, profile = _standard_extraction()
+    documents = []
+    for file in template.files:
+        path = tmp_path / file.name
+        path.write_text(file.file_id, encoding="utf-8")
+        documents.append(InputDocument(path, file.role))
+
+    def extract(inputs: Sequence[InputDocument]) -> ExtractionResult:
+        entries = InputRegistry.register(inputs).inputs
+        result = template.model_copy(deep=True)
+        file_ids = {
+            file.file_id: entry.file_id
+            for file, entry in zip(result.files, entries, strict=True)
+        }
+        result.files = [entry.to_file_record("COMPLETED") for entry in entries]
+        for source in result.sources:
+            source.file_id = file_ids[source.file_id]
+        return result
+
+    return documents, extract, profile
+
+
+def test_saved_case_rematches_duplicate_amounts_in_both_directions(tmp_path: Path) -> None:
+    documents, extract, profile = _file_backed_case(tmp_path)
+    matcher = CaseMatcher(profile)
+    scope = Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05")
+    direct = run_pipeline(documents, scope, extractor=extract, matcher=matcher)
+    root = tmp_path / "runs"
+    initial = run_and_save(
+        root, documents, scope, extractor=extract, matcher=matcher, run_id="case"
+    )
+    assert initial == direct.model_copy(update={"run_id": "case"})
+    context = initial.matching_context
+    assert isinstance(context, CaseMatching) and context.profile == profile
+    assert context.outcome.required_articles == tuple(profile.article_codes)
+    assert context.outcome.blocked_articles == {
+        "0200": "SUPPORT_MONTH_MISSING", "0300": "SUPPORT_MONTH_MISSING",
+    }
+    assert {item.reason for item in initial.excluded_documents} == {
+        "DUPLICATE", "OTHER_CONTRACT", "OTHER_PERIOD",
+    }
+    parent = load_run(root, "case")
+    initial_path = parent.revision_dir / "analysis.json"
+    initial_bytes = initial_path.read_bytes()
+    duplicate = next(item for item in initial.excluded_documents if item.reason == "DUPLICATE")
+    amount = next(source_id for source_id in duplicate.source_ids if source_id.endswith("-AMOUNT"))
+    for document in documents:
+        document.path.unlink()
+
+    conflict = correct_run_amount(
+        root, "case", expected_revision=1, source_id=amount, value="401", comment="Verify OCR"
+    )
+    conflict_context = conflict.analysis.matching_context
+    assert isinstance(conflict_context, CaseMatching)
+    assert {operation.row_id for operation in conflict_context.outcome.ambiguous_operations} == {
+        "R-07", "R-10",
+    }
+    assert conflict_context.outcome.blocked_articles["0800"] == "AMBIGUOUS_MATCH"
+    assert {issue.code for issue in conflict_context.outcome.issues} >= {"SUPPORT_UNRESOLVED"}
+    assert conflict.analysis.excluded_documents == [
+        item for item in initial.excluded_documents if item != duplicate
+    ]
+    checks = {check.check_id: check for check in conflict.analysis.checks}
+    check = checks["ARTICLE_AMOUNT:0800"]
+    assert (check.state, check.reason_code, check.calculation) == ("NOT_RUN", "AMBIGUOUS_MATCH", None)
+    assert checks["ARTICLE_AMOUNT:0900"] == next(
+        item for item in initial.checks if item.check_id == "ARTICLE_AMOUNT:0900"
+    )
+    assert load_run(root, "case", 2).analysis == replay_run(root, "case", 2) == conflict.analysis
+    with pytest.raises(RevisionConflictError):
+        correct_run_amount(root, "case", expected_revision=1, source_id=amount, value="402")
+    assert not (parent.run_dir / "revisions" / "3").exists()
+
+    restored = correct_run_amount(root, "case", expected_revision=2, source_id=amount, value="400")
+    assert restored.analysis.matching_context == context
+    assert restored.analysis.excluded_documents == initial.excluded_documents
+    assert restored.analysis.checks == initial.checks
+    assert restored.extraction.sources != parent.extraction.sources
+    source = next(item for item in restored.extraction.sources if item.source_id == amount)
+    assert (source.raw_text, source.value, source.review_status) == ("400.00", "400", "CORRECTED")
+    assert load_run(root, "case", 3) == restored
+    assert replay_run(root, "case", 3) == restored.analysis
+    assert replay_run(root, "case") == initial and initial_path.read_bytes() == initial_bytes
+
+    # The arithmetic still reproduces with this profile ID, but the chain must reject it.
+    path = restored.revision_dir / "analysis.json"
+    payload = json.loads(path.read_bytes())
+    payload["matching_context"]["profile"]["profile_id"] = "different-profile"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(CorruptRunError, match="does not match its parent"):
+        load_run(root, "case", 3)
+
+
+@pytest.mark.parametrize("change", ["context", "blocked_reason", "decision", "legacy"])
+def test_loading_saved_case_validates_the_context_and_analysis(
+    tmp_path: Path, change: str
+) -> None:
+    documents, extract, profile = _file_backed_case(tmp_path)
+    scope = Scope(currency="RUB", amount_basis="GROSS", reporting_period="2026-01..2026-05")
+    root = tmp_path / "runs"
+    run_and_save(root, documents, scope, extractor=extract, matcher=CaseMatcher(profile), run_id="case")
+    path = root / "case" / "revisions" / "1" / "analysis.json"
+    payload = json.loads(path.read_bytes())
+    if change == "blocked_reason":
+        payload["matching_context"]["outcome"]["blocked_articles"]["0200"] = "UNKNOWN_REASON"
+    elif change == "decision":
+        payload["decision"] = "NO_DISCREPANCIES"
+    else:
+        payload.pop("matching_context")
+        if change == "legacy":
+            payload["rules_version"] = "amount-and-totals-3"
+            payload["excluded_documents"] = []
+            payload["issues"] = []
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    if change != "legacy":
+        with pytest.raises(CorruptRunError):
+            load_run(root, "case")
+        return
+    historical = load_run(root, "case").analysis
+    assert historical.rules_version == "amount-and-totals-3" and historical.matching_context is None
+    assert replay_run(root, "case") == historical
+    with pytest.raises(IncompatibleRulesError, match="new verification"):
+        correct_run_amount(root, "case", expected_revision=1, source_id="S-R-10-AMOUNT", value="401")
+    assert not (root / "case" / "revisions" / "2").exists()
 
 
 def test_matches_allowed_articles_and_excludes_three_documents() -> None:

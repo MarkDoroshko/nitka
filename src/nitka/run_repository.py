@@ -23,13 +23,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from nitka.contracts.analysis import AnalysisResult
+from nitka.contracts.analysis import AnalysisResult, CaseMatching
 from nitka.contracts.extraction import ExtractionResult
 from nitka.contracts.inputs import InputManifest, input_manifest_hash
 from nitka.contracts.revisions import AmountCorrection
 from nitka.corrections import correct_amount
 from nitka.extraction.ports import InputDocument
 from nitka.extraction.registry import InputRegistry
+from nitka.pipeline import RULES_VERSION
 
 from ._storage_files import (
     _input_path,
@@ -56,6 +57,7 @@ from ._storage_models import (
     StorageError,
     StoredRun,
 )
+from ._stored_analysis import replay_stored
 
 
 @dataclass(frozen=True)
@@ -63,8 +65,18 @@ class StagedRun:
     """Input snapshots available only inside a repository staging context."""
 
     path: Path
-    manifest: InputManifest
-    documents: tuple[InputDocument, ...]
+    registry: InputRegistry
+
+    @property
+    def manifest(self) -> InputManifest:
+        return self.registry.manifest
+
+    @property
+    def documents(self) -> tuple[InputDocument, ...]:
+        return tuple(
+            InputDocument(path=entry.path, role=entry.role, name=entry.name)
+            for entry in self.registry.inputs
+        )
 
 
 class LocalRunRepository:
@@ -89,6 +101,8 @@ class LocalRunRepository:
         run_id: str,
         documents: Sequence[InputDocument],
         revision: int,
+        *,
+        registry: InputRegistry | None = None,
     ) -> Iterator[StagedRun]:
         _validate_run_id(run_id)
         if revision < 1:
@@ -104,22 +118,14 @@ class LocalRunRepository:
         except OSError as exc:
             raise StorageError(f"cannot create temporary run directory: {exc}") from exc
         try:
-            originals = InputRegistry.register(documents)
+            originals = registry if registry is not None else InputRegistry.register(documents)
             manifest = _snapshot_inputs(originals, temporary)
             copies = {
                 file.file_id: _input_path(temporary, file)
                 for file in manifest.files
                 if file.relative_path is not None
             }
-            registry = InputRegistry.restore(manifest, copies)
-            yield StagedRun(
-                temporary,
-                manifest,
-                tuple(
-                    InputDocument(path=entry.path, role=entry.role, name=entry.name)
-                    for entry in registry.inputs
-                ),
-            )
+            yield StagedRun(temporary, InputRegistry.restore(manifest, copies))
         except StorageError:
             raise
         except Exception as exc:
@@ -195,14 +201,14 @@ class LocalRunRepository:
             raise CorruptRunError("analysis.files does not match extraction.json")
         if analysis.sources != extraction.sources:
             raise CorruptRunError("analysis.sources does not match extraction.json")
-        if analysis.issues != extraction.issues:
+        if analysis.matching_context is None and analysis.issues != extraction.issues:
             raise CorruptRunError("analysis.issues does not match extraction.json")
 
         inputs = self.verify_inputs(run_dir, manifest) if verify_inputs else {}
         _verify_file_records(extraction.files, manifest, "extraction")
         _verify_file_records(analysis.files, manifest, "analysis")
 
-        return StoredRun(
+        stored = StoredRun(
             root=self.root,
             run_id=run_id,
             revision=revision,
@@ -212,6 +218,9 @@ class LocalRunRepository:
             analysis=analysis,
             inputs=inputs,
         )
+        if analysis.rules_version == RULES_VERSION:
+            replay_stored(stored, RULES_VERSION)
+        return stored
 
     def load(self, run_id: str, revision: int = 1) -> StoredRun:
         """Load a revision and its validated audit chain, hashing shared inputs once."""
@@ -257,7 +266,7 @@ class LocalRunRepository:
             if (
                 old_source.value != correction.old_value
                 or corrected != cursor.extraction
-                or cursor.analysis.matches != parent.analysis.matches
+                or not _same_matching_policy(cursor.analysis, parent.analysis)
                 or cursor.analysis.scope != parent.analysis.scope
                 or cursor.analysis.rules_version != parent.analysis.rules_version
             ):
@@ -331,3 +340,14 @@ class LocalRunRepository:
             inputs=stored.inputs,
             history=(*stored.history, correction),
         )
+
+
+def _same_matching_policy(child: AnalysisResult, parent: AnalysisResult) -> bool:
+    current = child.matching_context
+    previous = parent.matching_context
+    if isinstance(current, CaseMatching) and isinstance(previous, CaseMatching):
+        return (
+            current.profile == previous.profile
+            and current.matcher_version == previous.matcher_version
+        )
+    return current == previous and child.matches == parent.matches

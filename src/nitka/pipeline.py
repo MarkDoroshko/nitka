@@ -3,15 +3,25 @@ from typing import Final, Literal
 from uuid import uuid4
 
 from nitka.analysis.completeness import calculate_coverage, unverified_breakdowns
-from nitka.analysis.matching import CaseMatcher, Matcher, MatchOutcome
+from nitka.analysis.matching import CaseMatcher, Matcher
 from nitka.analysis.service import check_report
-from nitka.contracts.analysis import AnalysisResult, Match, Scope
+from nitka.contracts.analysis import (
+    AnalysisResult,
+    CaseMatching,
+    Match,
+    MatchingContext,
+    MatchOutcome,
+    Scope,
+    StaticMatching,
+)
 from nitka.contracts.extraction import ExtractionResult
 from nitka.contracts.inputs import input_manifest_hash as compute_input_manifest_hash
 from nitka.contracts.report_scope import REPORT_SCOPE_UNVERIFIED
+from nitka.extraction.package import PackageExtractor
 from nitka.extraction.ports import Extractor, InputDocument
 
-RULES_VERSION: Final[str] = "amount-and-totals-3"
+RULES_VERSION: Final[str] = "amount-and-totals-4"
+CASE_MATCHER_VERSION: Final[str] = "case-matcher-1"
 
 
 def analyze_extraction(
@@ -22,6 +32,7 @@ def analyze_extraction(
     run_id: str | None = None,
     revision: int = 1,
     input_manifest_hash: str | None = None,
+    matching_context: MatchingContext | None = None,
 ) -> AnalysisResult:
     outcome = matches if isinstance(matches, MatchOutcome) else None
     links = outcome.matches if outcome is not None else matches
@@ -86,7 +97,44 @@ def analyze_extraction(
         checks=checks,
         issues=issues,
         excluded_documents=list(outcome.excluded_documents) if outcome is not None else [],
+        matching_context=(
+            StaticMatching() if outcome is None and matching_context is None
+            else matching_context
+        ),
     )
+
+
+def evaluate_extraction(
+    extraction: ExtractionResult,
+    matcher: Matcher | Sequence[Match],
+    scope: Scope,
+    *,
+    run_id: str | None = None,
+    revision: int = 1,
+    input_manifest_hash: str | None = None,
+) -> AnalysisResult:
+    context = None
+    matches: MatchOutcome | Sequence[Match]
+    if type(matcher) is CaseMatcher:
+        profile = matcher.profile.model_copy(deep=True)
+        matches = CaseMatcher(profile).match(extraction)
+        context = CaseMatching(
+            profile=profile, matcher_version=CASE_MATCHER_VERSION, outcome=matches
+        )
+    elif isinstance(matcher, CaseMatcher):
+        matches = matcher.match(extraction)
+    else:
+        matches = matcher(extraction) if callable(matcher) else matcher
+    return analyze_extraction(
+        extraction, matches, scope, run_id=run_id, revision=revision,
+        input_manifest_hash=input_manifest_hash, matching_context=context,
+    )
+
+
+def require_matching_profiles(extractor: Extractor, matcher: Matcher) -> None:
+    if isinstance(extractor, PackageExtractor) and isinstance(matcher, CaseMatcher):
+        if extractor.profile != matcher.profile:
+            raise ValueError("extractor and matcher must use the same case profile")
 
 
 def run_pipeline(
@@ -96,6 +144,5 @@ def run_pipeline(
     extractor: Extractor,
     matcher: Matcher,
 ) -> AnalysisResult:
-    extraction = extractor(documents)
-    matches = matcher.match(extraction) if isinstance(matcher, CaseMatcher) else matcher(extraction)
-    return analyze_extraction(extraction, matches, scope)
+    require_matching_profiles(extractor, matcher)
+    return evaluate_extraction(extractor(documents), matcher, scope)

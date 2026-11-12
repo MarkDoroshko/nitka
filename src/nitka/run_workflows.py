@@ -7,23 +7,23 @@ from uuid import uuid4
 
 from nitka.analysis.matching import CaseMatcher, Matcher
 from nitka.contracts.analysis import AnalysisResult, Scope
+from nitka.contracts.extraction import Issue
 from nitka.contracts.inputs import input_manifest_hash
-from nitka.contracts.report_scope import report_scope_issues
 from nitka.contracts.revisions import AmountCorrection
 from nitka.contracts.validation import validate_extraction
 from nitka.corrections import correct_amount
+from nitka.extraction.limits import (
+    DEFAULT_PACKAGE_LIMITS,
+    PackageLimits,
+    enforce_package_size,
+)
+from nitka.extraction.package import PackageExtractor
 from nitka.extraction.ports import Extractor, InputDocument
-from nitka.pipeline import analyze_extraction
+from nitka.pipeline import evaluate_extraction, require_matching_profiles
 
-from ._storage_inputs import (
-    _bind_file_records,
-)
-from ._storage_models import (
-    IncompatibleRulesError,
-    ReplayMismatchError,
-    StorageError,
-    StoredRun,
-)
+from ._storage_inputs import _bind_file_records
+from ._storage_models import StorageError, StoredRun
+from ._stored_analysis import stored_matcher
 from .run_repository import LocalRunRepository
 
 
@@ -36,28 +36,35 @@ def run_and_save(
     matcher: Matcher,
     run_id: str | None = None,
     revision: int = 1,
+    limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
 ) -> AnalysisResult:
     """Analyze preserved inputs and publish a complete run."""
+    require_matching_profiles(extractor, matcher)
+    if isinstance(matcher, CaseMatcher) and type(matcher) is not CaseMatcher:
+        raise StorageError("only the built-in case matcher can be saved and replayed")
     run_id = run_id or str(uuid4())
-    with repository.stage_run(run_id, documents, revision) as staged:
+    registry = None
+    issues: list[Issue] = []
+    if isinstance(extractor, PackageExtractor):
+        registry, issues = extractor.register_inputs(documents)
+        enforce_package_size(registry.inputs, limits)
+    with repository.stage_run(run_id, documents, revision, registry=registry) as staged:
         manifest = staged.manifest
         manifest_hash = input_manifest_hash(manifest.files)
-        extraction = extractor(staged.documents)
+        extraction = (
+            extractor.extract_registered(staged.registry, issues=issues).extraction
+            if isinstance(extractor, PackageExtractor)
+            else extractor(staged.documents)
+        )
         _bind_file_records(extraction, manifest)
         validate_extraction(extraction)
         if input_manifest_hash(extraction.files) != manifest_hash:
             raise StorageError(
                 "extractor file records do not match the input snapshot manifest"
             )
-        if isinstance(matcher, CaseMatcher):
-            extraction.issues.extend(
-                issue for issue in report_scope_issues(extraction, matcher.profile)
-                if issue not in extraction.issues
-            )
-        matches = matcher(extraction)
-        analysis = analyze_extraction(
+        analysis = evaluate_extraction(
             extraction,
-            matches,
+            matcher,
             scope,
             run_id=run_id,
             revision=revision,
@@ -82,12 +89,11 @@ def correct_run_amount(
 ) -> StoredRun:
     """Publish a value-only revision from the latest saved revision.
 
-    No extraction or matching is repeated. A competing/stale edit raises
-    RevisionConflictError; the caller must reopen and review the current result.
+    Recompute case matching on the corrected extraction. A competing/stale edit
+    raises RevisionConflictError; the caller must reopen the current result.
     """
     stored = repository.load(run_id, expected_revision)
-    # Also reject a corrupt/incompatible baseline before deriving another result.
-    replay_stored(stored, rules_version)
+    matcher = stored_matcher(stored.analysis, rules_version)
     repository.require_current_revision(stored)
     extraction = correct_amount(stored.extraction, source_id, value)
     revision = expected_revision + 1
@@ -102,34 +108,12 @@ def correct_run_amount(
         new_value=new_source.value,
         comment=comment.strip(),
     )
-    analysis = analyze_extraction(
+    analysis = evaluate_extraction(
         extraction,
-        stored.analysis.matches,
+        matcher,
         stored.analysis.scope,
         run_id=run_id,
         revision=revision,
         input_manifest_hash=stored.manifest_hash,
     )
     return repository.publish_correction(stored, extraction, analysis, correction)
-
-
-def replay_stored(stored: StoredRun, rules_version: str) -> AnalysisResult:
-    if stored.analysis.rules_version != rules_version:
-        raise IncompatibleRulesError(
-            "stored rules_version "
-            f"{stored.analysis.rules_version!r} cannot be reproduced with "
-            f"local {rules_version!r}"
-        )
-    recomputed = analyze_extraction(
-        stored.extraction,
-        stored.analysis.matches,
-        stored.analysis.scope,
-        run_id=stored.run_id,
-        revision=stored.revision,
-        input_manifest_hash=stored.manifest_hash,
-    )
-    if recomputed != stored.analysis:
-        raise ReplayMismatchError(
-            "recomputed analysis differs from the stored analysis"
-        )
-    return recomputed

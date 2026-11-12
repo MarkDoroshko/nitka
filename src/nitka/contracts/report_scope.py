@@ -8,13 +8,13 @@ from typing import Final
 from nitka.contracts.extraction import ExtractionResult, Issue, Source
 from nitka.contracts.profile import CaseProfile, kfz_row_identity, normalize_contract
 
-PACKAGE_EXTRACTION_VERSION: Final = "package-2"
+PACKAGE_EXTRACTION_VERSION: Final = "package-3"
 REPORT_SCOPE_UNVERIFIED: Final = "REPORT_SCOPE_UNVERIFIED"
 REPORT_SCOPE_MIN_OCR_CONFIDENCE: Final = 0.80
 
 
 def report_scope_issues(extraction: ExtractionResult, profile: CaseProfile) -> tuple[Issue, ...]:
-    strict = extraction.extraction_version == PACKAGE_EXTRACTION_VERSION
+    strict = extraction.extraction_version in {"package-2", PACKAGE_EXTRACTION_VERSION}
     reports = {file.file_id for file in extraction.files if file.role == "REPORT"}
     sources = {source.source_id: source for source in extraction.sources}
     rows = [row for row in extraction.rows if sources[row.amount_source_id].file_id in reports]

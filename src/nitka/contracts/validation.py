@@ -23,6 +23,8 @@ def validate_extraction(extraction: ExtractionResult) -> None:
 
     files = {file.file_id: file for file in extraction.files}
     sources = {source.source_id: source for source in extraction.sources}
+    if extraction.ocr_provenance.keys() - files.keys():
+        raise ValueError("OCR provenance references an unknown file")
 
     for source in extraction.sources:
         if source.file_id not in files:
