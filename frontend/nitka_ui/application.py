@@ -11,6 +11,7 @@ from .demo_backend import DemoAdapter
 from .demo_models import RunSnapshot
 from .evidence import screen_evidence
 from .export_screen import screen_export
+from .package_screen import screen_package
 from .processing import screen_processing
 from .results import screen_results
 from .sidebar import _render_flash, _render_sidebar
@@ -88,4 +89,9 @@ def main() -> None:
         encoding="utf-8"
     )
     st.markdown(f"<style>\n{css}</style>", unsafe_allow_html=True)
-    AppController(AppSession(DemoAdapter(), _state())).render()
+    with st.sidebar:
+        mode = st.radio("Режим работы", ("Свои документы", "Демонстрация"), key="nitka_mode")
+    if mode == "Свои документы":
+        screen_package()
+    else:
+        AppController(AppSession(DemoAdapter(), _state())).render()

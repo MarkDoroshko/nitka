@@ -1,0 +1,14 @@
+{
+  "profile_id": "organizer-case5-2026",
+  "case_number": 5,
+  "contract": "24/03/15-01",
+  "service_period": {"start": "2026-01-01", "end": "2026-05-31"},
+  "target_stage": 3,
+  "target_year": 2026,
+  "target_row_label": "3 этап, 2026 г.",
+  "article_codes": ["0200", "0300", "0800", "0900"],
+  "operation_id_rule": "Договор, номер и дата операции",
+  "classification_basis": "Назначение расходов и код статьи",
+  "fragment": "Годовая строка КФЗ по этапу",
+  "profile_source": "README организатора кейса 5"
+}

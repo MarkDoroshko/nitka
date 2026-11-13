@@ -37,6 +37,7 @@ from nitka.ocr.engine import BoundingBox, OcrError, OcrPage, OcrProvenance
 
 _MIN_CONFIDENCE = 0.80
 _DOCX_SUFFIX = ".docx"
+SUPPORT_DOCUMENT_SUFFIXES = frozenset({PDF_SUFFIX, _DOCX_SUFFIX, *PDF_IMAGE_SUFFIXES})
 _IDENTIFIER = r"(?=[\w./-]*[0-9])[\w]+(?:[./-][\w]+)*"
 _DATE = r"[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4}"
 _MARKER = r"(?:№\s*|(?:No\.?|N)\s+)"
@@ -198,8 +199,7 @@ class SupportDocumentsExtractor:
             entry
             for entry in registry.inputs
             if entry.role == "SUPPORT"
-            and entry.path.suffix.lower()
-            in {PDF_SUFFIX, _DOCX_SUFFIX, *PDF_IMAGE_SUFFIXES}
+            and entry.path.suffix.lower() in SUPPORT_DOCUMENT_SUFFIXES
         ]
         inspections: dict[str, PdfInspection] = {}
         pages = 0

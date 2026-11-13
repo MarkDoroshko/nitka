@@ -1,10 +1,10 @@
 """Format uploaded file names and sizes for display."""
 
-from pathlib import Path
+from pathlib import PureWindowsPath
 
 
 def _suffix(name: str) -> str:
-    return Path(name).suffix.lower().lstrip(".")
+    return PureWindowsPath(name).suffix.lower().lstrip(".")
 
 
 _FILE_ICONS = {
@@ -13,7 +13,7 @@ _FILE_ICONS = {
     "jpg": "🖼️",
     "jpeg": "🖼️",
     "xlsx": "📊",
-    "csv": "📊",
+    "docx": "📝",
 }
 
 

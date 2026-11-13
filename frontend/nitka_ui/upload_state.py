@@ -5,12 +5,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TypedDict
 
+from nitka.extraction.limits import MAX_PACKAGE_BYTES as _MAX_PACKAGE_BYTES
+from nitka.extraction.package import KFZ_SUFFIX, PACKAGE_SUPPORT_SUFFIXES
+
 from .optional_streamlit import st
 from .upload_display import _display_name, _file_type_label, _format_bytes, _suffix
 
-_MAX_PACKAGE_BYTES = 25 * 1024 * 1024
-_REPORT_TYPES = ("xlsx", "csv", "pdf")
-_SUPPORT_TYPES = ("pdf", "png", "jpg", "jpeg", "xlsx", "csv")
+_REPORT_TYPES = (KFZ_SUFFIX.lstrip("."),)
+_SUPPORT_TYPES = tuple(sorted(suffix.lstrip(".") for suffix in PACKAGE_SUPPORT_SUFFIXES))
 _STATE_KEY = "nitka_upload_state"
 _SCENARIO_KEY = "nitka_upload_scenario"
 
@@ -186,30 +188,11 @@ def _normalize_scenarios(scenarios: Sequence[Any] | None) -> tuple[DemoScenario,
     return tuple(normalized) or DEFAULT_DEMO_SCENARIOS
 
 
-def _merge_documents(
-    existing: Sequence[_StoredFile],
-    uploaded: Sequence[UploadedFileLike],
-) -> tuple[list[_StoredFile], list[str]]:
-    merged = list(existing)
-    digests = {document.digest for document in merged}
-    skipped: list[str] = []
-
-    for file in uploaded:
-        stored = _store(file)
-        if stored.digest in digests:
-            skipped.append(f"«{_display_name(_file_name(file))}» уже есть в комплекте.")
-            continue
-        merged.append(stored)
-        digests.add(stored.digest)
-
-    return merged, skipped
-
-
 def _input_problems(state: _UploadState) -> list[str]:
     problems: list[str] = []
 
     if state.report is None:
-        problems.append("Добавьте один итоговый отчёт.")
+        problems.append("Добавьте одну КФЗ в PDF.")
     else:
         report_name = _file_name(state.report.file)
         if _suffix(report_name) not in _REPORT_TYPES:
@@ -253,7 +236,7 @@ def _get_state(
     if report is not None:
         state.report = _store(report)
     if documents:
-        state.documents, _ = _merge_documents((), documents)
+        state.documents = [_store(document) for document in documents]
     st.session_state[_STATE_KEY] = state
     return state
 

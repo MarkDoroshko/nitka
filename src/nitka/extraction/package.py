@@ -45,6 +45,7 @@ from nitka.extraction.pdf import PDF_IMAGE_SUFFIXES, PDF_SUFFIX, PdfInspector
 from nitka.extraction.ports import InputDocument
 from nitka.extraction.registry import InputReadError, InputRegistry, RegisteredInput
 from nitka.extraction.support_documents import (
+    SUPPORT_DOCUMENT_SUFFIXES,
     ImageRecognizer,
     SupportDocument,
     SupportDocumentsExtractor,
@@ -57,6 +58,10 @@ DocumentEvidence = KfzResult | PayrollResult | SupportDocument
 SourceMethod = Literal["TABLE", "PDF_TEXT", "OCR", "DOCX"]
 SourceLocation = CellLocation | PageLocation | OcrLocation | DocxLocation
 RowKind = Literal["ITEM", "DOCUMENT_TOTAL"]
+
+KFZ_SUFFIX = PDF_SUFFIX
+PAYROLL_SUFFIX = ".xlsx"
+PACKAGE_SUPPORT_SUFFIXES = SUPPORT_DOCUMENT_SUFFIXES | {PAYROLL_SUFFIX}
 
 
 @dataclass(frozen=True)
@@ -205,11 +210,11 @@ class PackageExtractor:
             suffix = entry.path.suffix.lower()
             if isinstance(native, SupportDocument):
                 status = _project_support(native, projected)
-            elif entry.role == "SUPPORT" and suffix == ".xlsx":
+            elif entry.role == "SUPPORT" and suffix == PAYROLL_SUFFIX:
                 payroll = _read_payroll(entry.path)
                 evidence[entry.file_id] = payroll
                 status = _project_payroll(payroll, projected, self._profile.contract)
-            elif entry.role == "REPORT" and suffix == PDF_SUFFIX:
+            elif entry.role == "REPORT" and suffix == KFZ_SUFFIX:
                 kfz = self._read_kfz(entry, previews / entry.file_id)
                 evidence[entry.file_id] = kfz
                 status = _project_kfz(kfz, projected, self._profile.article_codes)

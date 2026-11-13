@@ -25,7 +25,6 @@ from .upload_state import (
     _file_size,
     _get_state,
     _input_problems,
-    _merge_documents,
     _normalize_scenarios,
     _store,
     _total_size,
@@ -78,11 +77,11 @@ def _render_file_row(
 
 
 def _render_report_section(state: _UploadState) -> bool:
-    st.markdown("#### Отчёт")
-    st.caption("Один итоговый отчёт в формате XLSX, CSV или PDF.")
+    st.markdown("#### Карточка фактических затрат (КФЗ)")
+    st.caption("Одна КФЗ в формате PDF.")
 
     uploaded = st.file_uploader(
-        "Выберите отчёт",
+        "Выберите КФЗ",
         type=list(_REPORT_TYPES),
         accept_multiple_files=False,
         key=f"nitka_upload_report_{state.report_revision}",
@@ -111,7 +110,7 @@ def _render_report_section(state: _UploadState) -> bool:
         st.caption("Отчёт пока не добавлен.")
     elif _render_file_row(
         state.report.file,
-        caption="Итоговый отчёт",
+        caption="КФЗ",
         delete_key=f"nitka_upload_delete_report_{state.report.digest[:12]}",
     ):
         state.report = None
@@ -129,7 +128,10 @@ def _render_documents_section(state: _UploadState) -> bool:
     with count_column:
         st.caption(f"{len(state.documents)} {_files_word(len(state.documents))}")
 
-    st.caption("Можно добавить несколько файлов: PDF, PNG/JPG, XLSX или CSV.")
+    st.caption(
+        "Форматы первички — " + ", ".join(suffix.upper() for suffix in _SUPPORT_TYPES)
+        + ". XLSX используется для ведомостей и расчётов взносов."
+    )
 
     uploaded = st.file_uploader(
         "Выберите первичные документы",
@@ -141,18 +143,11 @@ def _render_documents_section(state: _UploadState) -> bool:
 
     changed = False
     if uploaded:
-        before = len(state.documents)
-        state.documents, skipped = _merge_documents(state.documents, uploaded)
-        added = len(state.documents) - before
+        state.documents.extend(_store(file) for file in uploaded)
+        added = len(uploaded)
         state.documents_revision += 1
         changed = True
-        if skipped:
-            state.notice = ("warning", " ".join(skipped))
-        else:
-            state.notice = (
-                "success",
-                f"Добавлено: {added} {_files_word(added)}.",
-            )
+        state.notice = ("success", f"Добавлено: {added} {_files_word(added)}.")
 
     if not state.documents:
         st.caption("Документы пока не добавлены.")
@@ -211,13 +206,6 @@ def _render_demo(
 
 
 def _render_own_files(state: _UploadState) -> RunAction | None:
-    st.markdown("#### Свои файлы")
-    st.caption("Один отчёт и любое количество документов-оснований.")
-    st.warning(
-        "Свои файлы обрабатываются в демонстрационном режиме. "
-        "Результат не является юридически значимым заключением."
-    )
-
     changed = _render_report_section(state)
     st.divider()
     changed = _render_documents_section(state) or changed
@@ -275,6 +263,12 @@ def _render_own_files(state: _UploadState) -> RunAction | None:
             }
 
     return None
+
+
+def render_package_upload() -> RunAction | None:
+    state = _get_state(None, ())
+    _show_notice(state)
+    return _render_own_files(state)
 
 
 def render_upload(

@@ -28,6 +28,7 @@ from nitka.contracts.extraction import ExtractionResult
 from nitka.contracts.inputs import InputManifest, input_manifest_hash
 from nitka.contracts.revisions import AmountCorrection
 from nitka.corrections import correct_amount
+from nitka.extraction.limits import PackageLimitError
 from nitka.extraction.ports import InputDocument
 from nitka.extraction.registry import InputRegistry
 from nitka.pipeline import RULES_VERSION
@@ -126,7 +127,7 @@ class LocalRunRepository:
                 if file.relative_path is not None
             }
             yield StagedRun(temporary, InputRegistry.restore(manifest, copies))
-        except StorageError:
+        except (PackageLimitError, StorageError):
             raise
         except Exception as exc:
             raise StorageError(f"run {run_id!r} failed: {exc}") from exc

@@ -3,7 +3,6 @@ from __future__ import annotations
 from .upload_state import (
     _MAX_PACKAGE_BYTES,
     _input_problems,
-    _merge_documents,
     _normalize_scenarios,
     _store,
     _UploadState,
@@ -43,20 +42,13 @@ def _run_self_checks() -> None:
     assert adapted[0].id == "from_adapter"
     assert adapted[0].expected == "Ожидание"
 
-    report = _store(FakeFile("report.xlsx", b"report"))
+    report = _store(FakeFile("report.pdf", b"report"))
     document = _store(FakeFile("act.pdf", b"act"))
     state = _UploadState(report=report, documents=[document])
     assert _input_problems(state) == []
 
-    merged, skipped = _merge_documents(
-        [document],
-        [FakeFile("copy.pdf", b"act")],
-    )
-    assert len(merged) == 1
-    assert skipped == ["«copy.pdf» уже есть в комплекте."]
-
     assert _input_problems(_UploadState()) == [
-        "Добавьте один итоговый отчёт.",
+        "Добавьте одну КФЗ в PDF.",
         "Добавьте хотя бы один первичный документ.",
     ]
     assert _format_bytes(1024) == "1.0 КБ"
