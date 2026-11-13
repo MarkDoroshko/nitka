@@ -223,16 +223,27 @@ class LocalRunRepository:
             replay_stored(stored, RULES_VERSION)
         return stored
 
+    def revisions(self, run_id: str) -> tuple[int, ...]:
+        """List published revision directory numbers, newest first."""
+        directory = _run_dir(self.root, run_id) / REVISIONS_DIR
+        try:
+            numbers = []
+            for path in directory.iterdir():
+                name = path.name
+                if name.isascii() and name.isdecimal() and not name.startswith("0") and path.is_dir():
+                    numbers.append(int(name))
+        except FileNotFoundError as exc:
+            raise RunNotFoundError(f"run {run_id!r} not found") from exc
+        if not numbers:
+            raise RunNotFoundError(f"run {run_id!r} has no published revisions")
+        return tuple(sorted(numbers, reverse=True))
+
     def load(self, run_id: str, revision: int = 1) -> StoredRun:
         """Load a revision and its validated audit chain, hashing shared inputs once."""
         stored = self._load_run_snapshot(run_id, revision)
         cursor = stored
         history: list[AmountCorrection] = []
-        revision_numbers = {
-            int(path.name)
-            for path in (stored.run_dir / REVISIONS_DIR).iterdir()
-            if path.is_dir() and path.name.isdecimal()
-        }
+        revision_numbers = self.revisions(run_id)
         while True:
             correction_path = cursor.revision_dir / CORRECTION_NAME
             if not correction_path.exists():
@@ -279,11 +290,7 @@ class LocalRunRepository:
         return replace(stored, history=tuple(reversed(history)))
 
     def require_current_revision(self, stored: StoredRun) -> None:
-        current = max(
-            int(path.name)
-            for path in (stored.run_dir / REVISIONS_DIR).iterdir()
-            if path.is_dir() and path.name.isdecimal()
-        )
+        current = self.revisions(stored.run_id)[0]
         if current != stored.revision:
             raise RevisionConflictError(
                 f"expected revision {stored.revision}, current {current}"

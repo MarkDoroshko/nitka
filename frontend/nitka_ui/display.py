@@ -96,7 +96,9 @@ def format_money(
         number = Decimal(value)
     except (InvalidOperation, ValueError):
         return str(value)
-    text = f"{number:,.2f}".replace(",", "\u00a0").replace(".", ",")
+    decimals = format(number, "f").partition(".")[2].rstrip("0")
+    precision = max(2, len(decimals))
+    text = f"{number:,.{precision}f}".replace(",", "\u00a0").replace(".", ",")
     if with_currency and currency:
         return f"{text}\u00a0{CURRENCY_SYMBOLS.get(currency, currency)}"
     return text

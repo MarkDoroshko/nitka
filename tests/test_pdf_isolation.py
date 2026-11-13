@@ -103,6 +103,18 @@ def test_renderer_renders_pages_sequentially(tmp_path: Path) -> None:
     assert all(path.is_file() and path.stat().st_size > 0 for path in result.pages)
 
 
+def test_renderer_rejects_oversized_raster_before_allocating(tmp_path: Path) -> None:
+    path = tmp_path / "oversized.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=10000, height=10000)
+    writer.write(path)
+    output = tmp_path / "pages"
+    result = PdfInspector().render(path, output, page=1)
+    assert not result.ok
+    assert result.error and "raster size limit" in result.error
+    assert list(output.iterdir()) == []
+
+
 def test_support_extractor_isolates_bad_pdfs_and_keeps_good_one(
     tmp_path: Path,
 ) -> None:

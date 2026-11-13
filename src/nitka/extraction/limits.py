@@ -15,6 +15,8 @@ from nitka.extraction.registry import RegisteredInput
 
 MAX_PACKAGE_BYTES: Final[int] = 25 * 1024 * 1024
 MAX_SUPPORT_PAGES: Final[int] = 20
+OCR_PDF_DPI: Final[float] = 200.0
+MAX_PREVIEW_PIXELS: Final[int] = 24_000_000
 DEFAULT_PDF_TIMEOUT_SECONDS: Final[float] = 30.0
 
 MAX_XLSX_UNCOMPRESSED_BYTES: Final[int] = 64 * 1024 * 1024

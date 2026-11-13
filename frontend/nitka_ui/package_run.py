@@ -8,7 +8,7 @@ from pathlib import Path, PureWindowsPath
 from tempfile import TemporaryDirectory
 
 from nitka.analysis.matching import CaseMatcher
-from nitka.contracts.analysis import AnalysisResult, Scope
+from nitka.contracts.analysis import Scope
 from nitka.contracts.extraction import FileRole
 from nitka.contracts.profile import CaseProfile
 from nitka.extraction.limits import MAX_PACKAGE_BYTES
@@ -20,7 +20,7 @@ from nitka.extraction.package import (
 from nitka.extraction.ports import InputDocument
 from nitka.extraction.support_documents import ImageRecognizer
 from nitka.ocr import OcrEngine
-from nitka.storage import load_run, run_and_save
+from nitka.storage import StoredRun, load_run, run_and_save
 
 from .upload_state import RunAction, UploadedFileLike
 
@@ -85,7 +85,7 @@ def run_uploaded_package(
     *,
     ocr: ImageRecognizer,
     show_stage: Callable[[str], None],
-) -> AnalysisResult:
+) -> StoredRun:
     period = profile.service_period
     scope = Scope(
         currency="RUB",
@@ -108,7 +108,7 @@ def run_uploaded_package(
             matcher=CaseMatcher(profile),
         )
     try:
-        return load_run(root, result.run_id, result.revision).analysis
+        return load_run(root, result.run_id, result.revision)
     except (OSError, ValueError, RuntimeError) as exc:
         raise PackageUploadError(
             f"Запуск {result.run_id} сохранён, но результат не удалось открыть."

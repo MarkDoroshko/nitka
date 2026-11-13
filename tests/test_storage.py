@@ -34,6 +34,7 @@ from nitka.storage import (
     RunExistsError,
     StorageError,
     correct_run_amount,
+    list_run_revisions,
     load_run,
     replay_run,
     run_and_save,
@@ -471,6 +472,18 @@ def test_stale_correction_cannot_overwrite_a_revision(tmp_path: Path) -> None:
         _correct(root, 1, "100000")
     assert load_run(root, "run-1", 2) == saved
     assert not (root / "run-1/revisions/3").exists()
+
+
+def test_revision_discovery_ignores_noncanonical_entries(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    _run(root, _documents(tmp_path))
+    revisions = root / "run-1/revisions"
+    for name in (".2-staging", "03", "0", "٢"):
+        (revisions / name).mkdir()
+    (revisions / "4").touch()
+    assert list_run_revisions(root, "run-1") == (1,)
+    assert _correct(root).revision == 2
+    assert list_run_revisions(root, "run-1") == (2, 1)
 
 
 @pytest.mark.parametrize("failure", ["write", "rename"])

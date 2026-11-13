@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from html import escape
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
-from .demo_models import CheckView, ExportError, RunSnapshot
+from nitka.contracts.analysis import AnalysisResult
+
+from .demo_models import CheckView, CorrectionRecord, ExportError, RunSnapshot
 from .display import (
     CHECK_STATE_LABELS,
-    CHECK_STATE_TONES,
     DECISION_LABELS,
     DECISION_TONES,
     EXECUTION_LABELS,
@@ -14,12 +15,59 @@ from .display import (
     format_delta,
     format_money,
     operand_value,
-    short_run_id,
 )
 from .pdf_fonts import _pdf_fonts
 
 
 def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
+    result = snapshot.result
+    rows = []
+    for view in views:
+        check = view.check
+        calculation = check.calculation
+        rows.append(
+            (
+                f"{view.row_label} · {view.report_row_id}",
+                CHECK_STATE_LABELS[check.state],
+                format_money(
+                    calculation.actual
+                    if calculation
+                    else operand_value(check, "reported"),
+                    result.scope.currency,
+                ),
+                format_money(
+                    calculation.expected
+                    if calculation
+                    else operand_value(check, "supported"),
+                    result.scope.currency,
+                ),
+                format_delta(
+                    calculation.delta if calculation else None, result.scope.currency
+                ),
+                REASON_LABELS.get(check.reason_code, check.reason_code),
+            )
+        )
+    return render_report_pdf(
+        result,
+        snapshot.kit.info.title,
+        snapshot.kit.info.description,
+        rows,
+        snapshot.history,
+        demo=True,
+    )
+
+
+def render_report_pdf(
+    result: AnalysisResult,
+    report_title: str,
+    description: str,
+    rows: Sequence[tuple[str, str, str, str, str, str]],
+    history: Sequence[CorrectionRecord],
+    *,
+    exclusions: Mapping[str, str] | None = None,
+    evidence: Sequence[tuple[str, Sequence[str]]] = (),
+    demo: bool = False,
+) -> bytes:
     try:
         from io import BytesIO
 
@@ -41,9 +89,8 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
         ) from exc
 
     fonts = _pdf_fonts()
-    result = snapshot.result
-    kit = snapshot.kit
     scope = result.scope
+    file_names = {file.file_id: file.name for file in result.files}
 
     styles = getSampleStyleSheet()
     body = ParagraphStyle(
@@ -115,9 +162,6 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
     def p(text: str, style: ParagraphStyle = body) -> Paragraph:
         return Paragraph(escape(text).replace("\n", "<br/>"), style)
 
-    def colored(text: str, color: str, style: ParagraphStyle = body) -> Paragraph:
-        return Paragraph(f'<font color="{color}">{escape(text)}</font>', style)
-
     buffer = BytesIO()
     document = SimpleDocTemplate(
         buffer,
@@ -127,42 +171,39 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
         topMargin=16 * mm,
         bottomMargin=18 * mm,
         title=f"Нитка — заключение {result.run_id}",
-        author="Нитка · демонстрационный адаптер",
-        subject=kit.info.title,
+        author="Нитка",
+        subject=report_title,
     )
 
     page_width = A4[0] - 34 * mm
     story: list[Any] = []
 
     def add_summary() -> None:
-        story.append(p("НИТКА · ДОКАЗАТЕЛЬНАЯ СВЕРКА · ДЕМО", small))
+        story.append(
+            p("НИТКА · ДОКАЗАТЕЛЬНАЯ СВЕРКА" + (" · ДЕМО" if demo else ""), small)
+        )
         story.append(Spacer(1, 3 * mm))
         story.append(p("Заключение по результатам сверки", title))
-        story.append(p(kit.info.title, heading))
-        story.append(p(kit.info.description, body))
+        story.append(p(report_title, heading))
+        story.append(p(description, body))
         story.append(Spacer(1, 3 * mm))
+        story.append(p(f"Запуск {result.run_id} · Редакция {result.revision}", body))
 
         meta_rows = [
             [
-                p("RUN ID", label),
-                p(short_run_id(result.run_id), cell),
-                p("РЕДАКЦИЯ", label),
-                p(str(result.revision), cell_bold),
                 p("ПЕРИОД", label),
                 p(scope.reporting_period, cell),
+                p("ВАЛЮТА / БАЗА", label),
+                p(f"{scope.currency} / {scope.amount_basis}", cell),
             ],
             [
                 p("ПРАВИЛА", label),
                 p(result.rules_version, cell),
                 p("ИЗВЛЕЧЕНИЕ", label),
                 p(result.extraction_version, cell),
-                p("ВАЛЮТА / БАЗА", label),
-                p(f"{scope.currency} / {scope.amount_basis}", cell),
             ],
         ]
-        meta = Table(
-            meta_rows, colWidths=[18 * mm, 38 * mm, 20 * mm, 32 * mm, 24 * mm, 42 * mm]
-        )
+        meta = Table(meta_rows, colWidths=[21 * mm, 64 * mm, 34 * mm, 55 * mm])
         meta.setStyle(
             TableStyle(
                 [
@@ -206,7 +247,7 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
         )
 
     def add_checks() -> None:
-        story.append(p("1. Проверки по строкам", heading))
+        story.append(p("Проверки по строкам", heading))
         checks_rows: list[list[Any]] = [
             [
                 p("Строка", label),
@@ -217,44 +258,7 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
                 p("Основание", label),
             ]
         ]
-        for view in views:
-            calculation = view.check.calculation
-            reported_value = (
-                calculation.actual
-                if calculation
-                else operand_value(view.check, "reported")
-            )
-            supported_value = (
-                calculation.expected
-                if calculation
-                else operand_value(view.check, "supported")
-            )
-            reason = REASON_LABELS.get(view.check.reason_code, view.check.reason_code)
-            status_color = {
-                "success": "#1f6f5c",
-                "danger": "#b42318",
-                "warning": "#a15c07",
-            }.get(CHECK_STATE_TONES.get(view.check.state, "neutral"), "#52606d")
-            checks_rows.append(
-                [
-                    p(f"{view.row_label} · {view.report_row_id}", cell),
-                    colored(
-                        CHECK_STATE_LABELS.get(view.check.state, view.check.state),
-                        status_color,
-                        cell,
-                    ),
-                    p(format_money(reported_value, scope.currency), cell),
-                    p(format_money(supported_value, scope.currency), cell),
-                    colored(
-                        format_delta(
-                            calculation.delta if calculation else None, scope.currency
-                        ),
-                        status_color,
-                        cell,
-                    ),
-                    p(reason, cell),
-                ]
-            )
+        checks_rows.extend([p(value, cell) for value in row] for row in rows)
         checks_table = Table(
             checks_rows,
             colWidths=[42 * mm, 20 * mm, 24 * mm, 26 * mm, 24 * mm, 38 * mm],
@@ -276,7 +280,14 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
         story.append(checks_table)
 
     def add_processing_issues() -> None:
-        story.append(p("2. Ошибки обработки и вопросы", heading))
+        story.append(p("Ограничения и замечания", heading))
+        if result.coverage.completed_checks < result.coverage.required_checks:
+            story.append(
+                p(
+                    "Часть показателей требует дополнительных документов или ручной проверки. Основания указаны в таблице проверок.",
+                    body,
+                )
+            )
         if result.issues:
             for issue in result.issues:
                 story.append(
@@ -284,7 +295,11 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
                         [
                             p(
                                 f"{issue.code}"
-                                + (f" · {issue.file_id}" if issue.file_id else ""),
+                                + (
+                                    f" · {file_names.get(issue.file_id, issue.file_id)}"
+                                    if issue.file_id
+                                    else ""
+                                ),
                                 label,
                             ),
                             p(issue.detail, body),
@@ -296,9 +311,9 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
             story.append(p("Ошибок обработки нет.", body))
 
     def add_revision_history() -> None:
-        if snapshot.history:
-            story.append(p("3. История редакций", heading))
-            for item in snapshot.history:
+        if history:
+            story.append(p("История редакций", heading))
+            for item in history:
                 story.append(
                     p(
                         f"Редакция {item.revision} · {item.row_label}: "
@@ -309,26 +324,36 @@ def _render_pdf(snapshot: RunSnapshot, views: Sequence[CheckView]) -> bytes:
                     )
                 )
 
+    def add_exclusions() -> None:
+        if result.excluded_documents:
+            story.append(p("Исключено из расчёта", heading))
+        for item in result.excluded_documents:
+            name = file_names.get(item.file_id, item.file_id)
+            reason = (exclusions or {}).get(item.reason, item.reason)
+            story.append(
+                KeepTogether([p(f"{name} · {reason}", label), p(item.detail, body)])
+            )
+
     add_summary()
     add_checks()
+    add_exclusions()
     add_processing_issues()
     add_revision_history()
+    if evidence:
+        story.append(p("Адреса источников", heading))
+        for check_label, addresses in evidence:
+            story.append(p(check_label, label))
+            story.extend(p(address, small) for address in addresses)
 
-    story.append(Spacer(1, 6 * mm))
-    story.append(
-        p(
-            "Демонстрационный образец. Данные синтетические. "
-            "PDF и JSON относятся к одной редакции run_id + revision; "
-            "модель не формирует итоговый статус.",
-            small,
-        )
-    )
+    if demo:
+        story.append(Spacer(1, 6 * mm))
+        story.append(p("Демонстрационный образец. Данные синтетические.", small))
 
     def draw_footer(canvas: Any, doc: Any) -> None:
         canvas.saveState()
         canvas.setFont(fonts.regular, 7)
         canvas.setFillColor(colors.HexColor("#69756f"))
-        canvas.drawString(17 * mm, 9 * mm, "Нитка · демонстрационный адаптер")
+        canvas.drawString(17 * mm, 9 * mm, f"Нитка · редакция {result.revision}")
         canvas.drawRightString(A4[0] - 17 * mm, 9 * mm, f"стр. {doc.page}")
         canvas.restoreState()
 

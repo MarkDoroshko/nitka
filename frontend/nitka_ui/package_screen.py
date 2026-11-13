@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from uuid import UUID
 
 import streamlit as st
 
 from nitka.contracts.analysis import AnalysisResult, CaseMatching, Check
 from nitka.contracts.profile import CaseProfile
 from nitka.extraction.limits import PackageLimitError
+from nitka.storage import (
+    RunNotFoundError,
+    StorageError,
+    StoredRun,
+    list_run_revisions,
+    load_run,
+)
 
+from .demo_models import CorrectionRecord, ExportError
 from .display import (
     CHECK_STATE_LABELS,
     DECISION_LABELS,
@@ -22,6 +31,8 @@ from .display import (
     format_money,
     operand_value,
 )
+from .package_details import show_check, show_history
+from .package_evidence import check_evidence, source_address
 from .package_run import (
     PackageUploadError,
     load_profile,
@@ -29,6 +40,7 @@ from .package_run import (
     run_uploaded_package,
     runs_root,
 )
+from .pdf_report import render_report_pdf
 from .upload_state import reset_upload_state
 from .upload_widgets import render_package_upload
 
@@ -78,8 +90,15 @@ _EXCLUSIONS = {
 @dataclass
 class _PackageRun:
     running: bool = False
-    result: AnalysisResult | None = None
+    stored: StoredRun | None = None
     error: str | None = None
+    selected_check: str | None = None
+    pdf: bytes | None = None
+
+    def open(self, stored: StoredRun) -> None:
+        self.stored = stored
+        self.pdf = None
+        self.error = None
 
 
 def _show_scope(profile: CaseProfile) -> None:
@@ -177,7 +196,7 @@ def _show_result(result: AnalysisResult) -> None:
             [
                 {
                     "Файл": names.get(item.file_id, item.file_id),
-                    "Причина": _EXCLUSIONS[item.reason],
+                    "Причина": _EXCLUSIONS.get(item.reason, item.reason),
                     "Подробности": item.detail,
                 }
                 for item in result.excluded_documents
@@ -217,21 +236,190 @@ def _show_result(result: AnalysisResult) -> None:
             )
 
 
+def _open_saved_run(run: _PackageRun) -> None:
+    with st.expander("Открыть сохранённую проверку"):
+        with st.form("nitka_package_open"):
+            identifier = st.text_input("Идентификатор запуска", max_chars=36)
+            submitted = st.form_submit_button("Открыть последнюю редакцию")
+        if not submitted:
+            return
+        try:
+            run_id = str(UUID(identifier.strip()))
+        except ValueError:
+            st.error("Введите идентификатор запуска, указанный в результате проверки.")
+            return
+        try:
+            root = runs_root()
+            run.open(load_run(root, run_id, list_run_revisions(root, run_id)[0]))
+        except RunNotFoundError:
+            st.error("Сохранённая проверка с таким идентификатором не найдена.")
+            return
+        except (OSError, StorageError, ValueError):
+            _LOGGER.exception("Cannot open run %s", run_id)
+            st.error("Не удалось открыть сохранённую проверку. Проверьте хранилище.")
+            return
+        st.rerun()
+
+
+def _render_package_pdf(stored: StoredRun) -> bytes:
+    result = stored.analysis
+    profile = (
+        result.matching_context.profile
+        if isinstance(result.matching_context, CaseMatching)
+        else None
+    )
+    description = (
+        f"Кейс {profile.case_number} · договор {profile.contract} · строка КФЗ «{profile.target_row_label}»"
+        if profile
+        else ""
+    )
+    files = {file.file_id: file.name for file in result.files}
+    sources = {source.source_id: source for source in result.sources}
+    history = [
+        CorrectionRecord(
+            item.revision,
+            item.source_id,
+            f"{files[sources[item.source_id].file_id]} · {source_address(sources[item.source_id])}",
+            item.old_value,
+            item.new_value,
+            item.comment,
+        )
+        for item in stored.history
+    ]
+    rows = [
+        (
+            row["Показатель"],
+            row["Статус"],
+            row["КФЗ"],
+            row["По документам / расчёту"],
+            row["Разница"],
+            row["Основание"],
+        )
+        for row in _check_rows(result)
+    ]
+    evidence = []
+    for check in result.checks:
+        items = check_evidence(check, sources)
+        addresses = [
+            f"{files[source.file_id]} · {source_address(source)}"
+            for source in (*items.reported, *items.supported, *items.other)
+        ]
+        if addresses:
+            evidence.append((_check_label(check), list(dict.fromkeys(addresses))))
+    return render_report_pdf(
+        result,
+        "Проверка комплекта",
+        description,
+        rows,
+        history,
+        exclusions=_EXCLUSIONS,
+        evidence=evidence,
+    )
+
+
+def _show_exports(run: _PackageRun, stored: StoredRun, key: str) -> None:
+    with st.expander("Выгрузить редакцию"):
+        filename = f"nitka-{stored.run_id}-r{stored.revision}"
+        st.download_button(
+            "Скачать JSON",
+            stored.analysis.model_dump_json(indent=2).encode("utf-8"),
+            file_name=f"{filename}.json",
+            mime="application/json",
+            key=f"{key}_json",
+        )
+        if run.pdf is None and st.button("Подготовить PDF", key=f"{key}_pdf_prepare"):
+            try:
+                run.pdf = _render_package_pdf(stored)
+            except (ExportError, OSError, ValueError):
+                _LOGGER.exception(
+                    "Cannot export run %s revision %s", stored.run_id, stored.revision
+                )
+                st.error(
+                    "Не удалось подготовить PDF. Проверьте ReportLab и наличие шрифта с кириллицей."
+                )
+        if run.pdf is not None:
+            st.download_button(
+                "Скачать PDF",
+                run.pdf,
+                file_name=f"{filename}.pdf",
+                mime="application/pdf",
+                key=f"{key}_pdf",
+            )
+
+
+def _show_stored(run: _PackageRun, stored: StoredRun) -> None:
+    if st.button("Загрузить новый комплект", key="nitka_package_new"):
+        st.session_state.pop(_RUN_KEY)
+        reset_upload_state()
+        st.rerun()
+    key = f"nitka_package_{stored.run_id}_{stored.revision}"
+    try:
+        revisions = list_run_revisions(stored.root, stored.run_id)
+    except (OSError, StorageError):
+        _LOGGER.exception("Cannot list revisions for %s", stored.run_id)
+        st.warning("Не удалось прочитать список редакций.")
+        revisions = ()
+    if revisions and stored.revision in revisions and len(revisions) > 1:
+        with st.form(f"{key}_revisions"):
+            revision = st.selectbox(
+                "Редакция", revisions, index=revisions.index(stored.revision)
+            )
+            if (
+                st.form_submit_button("Открыть редакцию")
+                and revision != stored.revision
+            ):
+                try:
+                    run.open(load_run(stored.root, stored.run_id, revision))
+                except (OSError, StorageError, ValueError):
+                    _LOGGER.exception(
+                        "Cannot open run %s revision %s", stored.run_id, revision
+                    )
+                    st.error("Не удалось открыть выбранную редакцию.")
+                else:
+                    st.rerun()
+
+    _show_result(stored.analysis)
+    checks = {check.check_id: check for check in stored.analysis.checks}
+    if checks:
+        st.subheader("Доказательства")
+        options = [None, *checks]
+        initial = run.selected_check if run.selected_check in checks else None
+        selected = st.selectbox(
+            "Показатель для просмотра",
+            options,
+            index=options.index(initial),
+            format_func=lambda check_id: (
+                _check_label(checks[check_id]) if check_id else "Выберите показатель"
+            ),
+            key=f"{key}_check",
+        )
+        run.selected_check = selected
+        if selected is not None:
+            updated = show_check(
+                stored,
+                checks[selected],
+                f"{key}_{selected}",
+                current=bool(revisions and revisions[0] == stored.revision),
+            )
+            if updated is not None:
+                run.open(updated)
+                st.rerun()
+    show_history(stored)
+    _show_exports(run, stored, key)
+
+
 def screen_package() -> None:
     st.title("Проверка комплекта")
     run = st.session_state.setdefault(_RUN_KEY, _PackageRun())
-    if run.result is not None:
-        if st.button("Загрузить новый комплект", key="nitka_package_new"):
-            st.session_state.pop(_RUN_KEY)
-            reset_upload_state()
-            st.rerun()
-        _show_result(run.result)
+    if run.stored is not None:
+        _show_stored(run, run.stored)
         return
     if run.running:
         st.info("Комплект обрабатывается. Обновите статус, чтобы увидеть результат.")
         st.button("Обновить статус")
         return
 
+    _open_saved_run(run)
     try:
         profile = load_profile()
     except (OSError, ValueError):
@@ -252,8 +440,10 @@ def screen_package() -> None:
     try:
         with st.status("Проверяем комплект", expanded=True):
             # Store the result before the next Streamlit call can interrupt this run.
-            run.result = run_uploaded_package(
-                action, profile, runs_root(), ocr=local_ocr(), show_stage=st.write
+            run.open(
+                run_uploaded_package(
+                    action, profile, runs_root(), ocr=local_ocr(), show_stage=st.write
+                )
             )
     except PackageUploadError as exc:
         run.error = str(exc)

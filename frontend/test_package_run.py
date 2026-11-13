@@ -103,13 +103,14 @@ def test_broken_package_is_saved_as_failed_result(tmp_path: Path) -> None:
     }
     profile = package_run.load_profile()
     stages: list[str] = []
-    result = package_run.run_uploaded_package(
+    snapshot = package_run.run_uploaded_package(
         action,
         profile,
         tmp_path,
         ocr=UnusedOcr(),
         show_stage=stages.append,
     )
+    result = snapshot.analysis
     assert len(stages) == 2
     assert result.execution_status == "FAILED"
     assert result.decision == "REVIEW_REQUIRED"
@@ -167,7 +168,7 @@ def test_missing_ocr_weights_are_reported_on_the_kfz(
         tmp_path / "runs",
         ocr=package_run.local_ocr(),
         show_stage=lambda _: None,
-    )
+    ).analysis
     report = next(file for file in result.files if file.role == "REPORT")
     assert report.status == "FAILED"
     assert result.decision == "REVIEW_REQUIRED"

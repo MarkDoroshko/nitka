@@ -37,6 +37,7 @@ from nitka.extraction.docx_support import DocxLocation as NativeDocxLocation
 from nitka.extraction.kfz import KfzFragment, KfzResult, kfz_header_value, parse_kfz
 from nitka.extraction.limits import (
     DEFAULT_PACKAGE_LIMITS,
+    OCR_PDF_DPI,
     PackageLimits,
     enforce_package_size,
 )
@@ -258,7 +259,7 @@ class PackageExtractor:
 
     def _read_kfz(self, entry: RegisteredInput, previews: Path) -> KfzResult:
         rendered = self._pdf.render(
-            entry.path, previews, dpi=200, max_pages=self._limits.max_support_pages
+            entry.path, previews, dpi=OCR_PDF_DPI, max_pages=self._limits.max_support_pages
         )
         if not rendered.ok or not rendered.pages:
             return KfzResult(

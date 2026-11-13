@@ -45,7 +45,7 @@ Streamlit принимает КФЗ и первичные документы и 
 
 После установки backend-зависимостей установите `pip install -r frontend/requirements.txt`.
 Проверки: `python -m pytest`, `python -m ruff check .`, `python -m mypy`.
-Демо: `python examples/demo.py`; интерфейс: `python -m streamlit run frontend/app.py`.
+Демо запускается командой `python examples/demo.py`, локальный интерфейс — `python -m streamlit run frontend/app.py --server.address 127.0.0.1`.
 Настройка локального OCR: [config/ocr/README.md](config/ocr/README.md).
 
 ## Границы публичного переноса

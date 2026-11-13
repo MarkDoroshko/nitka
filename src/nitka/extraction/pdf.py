@@ -157,6 +157,7 @@ class PdfInspector:
         *,
         dpi: float = 150.0,
         max_pages: int = DEFAULT_PACKAGE_LIMITS.max_support_pages,
+        page: int | None = None,
     ) -> PdfRenderResult:
         try:
             completed = self._run(
@@ -168,6 +169,7 @@ class PdfInspector:
                     str(dpi),
                     "--max-pages",
                     str(max_pages),
+                    *(("--page", str(page)) if page is not None else ()),
                 )
             )
         except _WorkerTimeout:

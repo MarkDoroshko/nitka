@@ -131,6 +131,11 @@ def load_run(root: Path | str, run_id: str, revision: int = 1) -> StoredRun:
     return _repository(root).load(run_id, revision)
 
 
+def list_run_revisions(root: Path | str, run_id: str) -> tuple[int, ...]:
+    """List published revisions, newest first. Load a revision to validate it."""
+    return _repository(root).revisions(run_id)
+
+
 def correct_run_amount(
     root: Path | str,
     run_id: str,

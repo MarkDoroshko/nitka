@@ -18,6 +18,7 @@ from nitka.contracts.extraction import FileRecord, Issue
 from nitka.extraction.docx_support import DocxLocation, read_docx
 from nitka.extraction.limits import (
     DEFAULT_PACKAGE_LIMITS,
+    OCR_PDF_DPI,
     PackageLimitError,
     PackageLimits,
     enforce_package_size,
@@ -303,7 +304,7 @@ class SupportDocumentsExtractor:
             rendered = self.inspector.render(
                 entry.path,
                 self.preview_dir / entry.file_id,
-                dpi=200,
+                dpi=OCR_PDF_DPI,
                 max_pages=self.limits.max_support_pages,
             )
             if rendered.ok and len(rendered.pages) == inspection.page_count:

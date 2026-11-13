@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
+
+from nitka.extraction.limits import MAX_PREVIEW_PIXELS
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("output", nargs="?")
     parser.add_argument("--dpi", type=float, default=150.0)
     parser.add_argument("--max-pages", type=int, default=20)
+    parser.add_argument("--page", type=int)
     args = parser.parse_args(argv)
 
     if args.command == "inspect":
@@ -30,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.output:
             _emit({"ok": False, "error": "render requires an output directory"})
         else:
-            _render(Path(args.path), Path(args.output), args.dpi, args.max_pages)
+            _render(Path(args.path), Path(args.output), args.dpi, args.max_pages, args.page)
     return 0
 
 
@@ -76,7 +80,7 @@ def _extract(path: Path) -> None:
         _emit({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
-def _render(path: Path, output: Path, dpi: float, max_pages: int) -> None:
+def _render(path: Path, output: Path, dpi: float, max_pages: int, number: int | None) -> None:
     try:
         import pypdfium2 as pdfium
 
@@ -93,13 +97,25 @@ def _render(path: Path, output: Path, dpi: float, max_pages: int) -> None:
                 return
             output.mkdir(parents=True, exist_ok=True)
             files: list[str] = []
-            for index in range(page_count):
+            if number is not None and not 1 <= number <= page_count:
+                raise ValueError(f"page {number} is outside the document")
+            indices = range(page_count) if number is None else (number - 1,)
+            scale = dpi / 72.0
+            for index in indices:
                 page = document[index]
-                bitmap = page.render(scale=dpi / 72.0)
-                image = bitmap.to_pil()
-                target = output / f"page-{index + 1:04d}.png"
-                image.save(target, format="PNG")
-                image.close()
+                try:
+                    width, height = (math.ceil(edge * scale) for edge in page.get_size())
+                    if width <= 0 or height <= 0 or width * height > MAX_PREVIEW_PIXELS:
+                        raise ValueError(f"page {index + 1} exceeds the raster size limit")
+                    bitmap = page.render(scale=scale)
+                    try:
+                        with bitmap.to_pil() as image:
+                            target = output / f"page-{index + 1:04d}.png"
+                            image.save(target, format="PNG")
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
                 files.append(str(target))
             _emit({"ok": True, "pages": page_count, "files": files})
         finally:
