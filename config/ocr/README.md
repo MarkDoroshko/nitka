@@ -4,7 +4,7 @@ Install the CPU runtime in the same Python 3.12 environment as Nitka. The tested
 engine versions are PaddleOCR 3.7.0, PaddleX 3.7.2 and ONNX Runtime 1.31.1.
 
 ```shell
-python -m pip install "paddleocr==3.7.0" "paddlex[ocr]==3.7.2" "onnxruntime==1.31.1"
+python -m pip install "paddleocr==3.7.0" "paddlex[ocr-core]==3.7.2" "onnxruntime==1.31.1"
 ```
 
 Provision the two Apache-2.0 PaddlePaddle ONNX models from the sources below.
@@ -17,6 +17,19 @@ and reports missing or mismatched files before loading the runtime.
 | --- | --- |
 | `PP-OCRv5_mobile_det` | [PaddlePaddle detector](https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/tree/main) |
 | `cyrillic_PP-OCRv5_mobile_rec` | [PaddlePaddle Cyrillic recognizer](https://huggingface.co/PaddlePaddle/cyrillic_PP-OCRv5_mobile_rec_onnx/tree/main) |
+
+```text
+ppocr-v5/
+├── PP-OCRv5_mobile_det/
+│   ├── inference.onnx
+│   └── inference.yml
+└── cyrillic_PP-OCRv5_mobile_rec/
+    ├── inference.onnx
+    └── inference.yml
+```
+
+The [Docker image](../../README.md#запуск-в-docker) already includes the CPU
+runtime. Mount the `ppocr-v5` directory at `/models` read-only.
 
 ```python
 from pathlib import Path

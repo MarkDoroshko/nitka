@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!requirements-docker.txt
+!README.md
+!pyproject.toml
+!src/nitka/**/*.py
+!config/case5.json
+!config/ocr/ppocr-v5.json
+!frontend/app.py
+!frontend/nitka_ui/**/*.py
+!frontend/assets/**/*.css
+!frontend/demo_data/*.json

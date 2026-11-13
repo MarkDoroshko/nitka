@@ -11,23 +11,29 @@ from nitka.contracts.profile import CaseProfile
 from nitka.extraction.package import PackageExtractor
 from nitka.extraction.ports import InputDocument
 from nitka.ocr import OcrEngine
-from nitka.storage import load_run, replay_run, run_and_save
+from nitka.storage import StoredRun, load_run, replay_run, run_and_save
+
+_MANIFEST = Path(__file__).resolve().parents[2] / "config" / "ocr" / "ppocr-v5.json"
 
 
-def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
+def _run_organizer_case(
+    tmp_path: Path, *, omit_january_payroll: bool = False
+) -> tuple[StoredRun, CaseProfile]:
     case_dir = os.environ.get("NITKA_PACKAGE_SMOKE_DIR")
     if case_dir is None:
         pytest.skip("Set NITKA_PACKAGE_SMOKE_DIR for the real organizer case")
-    manifest = Path(__file__).resolve().parents[2] / "config" / "ocr" / "ppocr-v5.json"
     profile = CaseProfile.model_validate_json(
         Path(os.environ["NITKA_PACKAGE_SMOKE_PROFILE"]).read_bytes()
     )
-    engine = OcrEngine(Path(os.environ["NITKA_OCR_MODELS"]), manifest)
+    engine = OcrEngine(Path(os.environ["NITKA_OCR_MODELS"]), _MANIFEST)
     roles: tuple[FileRole, ...] = ("REPORT", "SUPPORT", "TECHNICAL")
     documents = [
         InputDocument(path, role)
         for role in roles
         for path in sorted((Path(case_dir) / role.lower()).iterdir())
+        if not (
+            omit_january_payroll and role == "SUPPORT" and path.name.startswith("02_01_")
+        )
     ]
     report = next(document.path for document in documents if document.role == "REPORT")
     documents.extend([InputDocument(report, "TECHNICAL"), InputDocument(report, "ORACLE")])
@@ -40,8 +46,13 @@ def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
         matcher=CaseMatcher(profile),
     )
     stored = load_run(root, result.run_id)
+    assert stored.analysis == result == replay_run(root, result.run_id)
+    return stored, profile
+
+
+def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
+    stored, profile = _run_organizer_case(tmp_path)
     loaded = stored.analysis
-    assert loaded == result == replay_run(root, result.run_id)
     context = loaded.matching_context
     assert isinstance(context, CaseMatching) and context.profile == profile
     assert context.outcome == CaseMatcher(profile).match(stored.extraction)
@@ -49,7 +60,7 @@ def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
     files = {file.file_id: file for file in loaded.files}
     ocr_pages = stored.extraction.ocr_provenance
     assert {files[file_id].name[:2] for file_id in ocr_pages} == {"01", "04", "08", "12", "15"}
-    expected_provenance = OcrProvenance.model_validate_json(manifest.read_bytes())
+    expected_provenance = OcrProvenance.model_validate_json(_MANIFEST.read_bytes())
     assert all(pages == {1: expected_provenance} for pages in ocr_pages.values())
     assert len(files) == 23
     assert all(file.role in {"REPORT", "SUPPORT"} and file.status != "FAILED" for file in files.values())
@@ -103,3 +114,29 @@ def test_reconciles_organizer_case_with_real_ocr(tmp_path: Path) -> None:
             assert source.raw_text and source.confidence is not None
             assert source.location.kind == "OCR"
             assert source.location.page == 1 and source.location.bbox is not None
+
+
+def test_missing_payroll_preserves_independent_discrepancy(tmp_path: Path) -> None:
+    stored, _ = _run_organizer_case(tmp_path, omit_january_payroll=True)
+    result = stored.analysis
+    assert len(stored.inputs) == 22
+    assert result.execution_status == "PARTIAL"
+    assert result.decision == "DISCREPANCIES_FOUND"
+    checks = {check.check_id: check for check in result.checks}
+    for check_id, reason in (
+        ("ARTICLE_AMOUNT:0200", "SUPPORT_MONTH_MISSING"),
+        ("SUPPORT_TOTAL:OVERALL", "OVERALL_SUPPORT_MISSING"),
+    ):
+        check = checks[check_id]
+        assert check.state == "NOT_RUN"
+        assert check.reason_code == reason
+        assert check.calculation is None
+    assert any(
+        issue.code == "SUPPORT_MONTH_MISSING" and issue.detail == "0200: 2026-01"
+        for issue in result.issues
+    )
+    discrepancy = checks["ARTICLE_AMOUNT:0800"]
+    assert discrepancy.state == "FAIL"
+    assert discrepancy.calculation is not None
+    assert Decimal(discrepancy.calculation.delta) == Decimal("12500.00")
+    assert checks["ARTICLE_AMOUNT:0300"].state == checks["ARTICLE_AMOUNT:0900"].state == "PASS"
