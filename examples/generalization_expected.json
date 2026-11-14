@@ -1,0 +1,46 @@
+{
+  "report_amounts": {
+    "numbered": {
+      "materials": "0.00",
+      "0200": "52000.25",
+      "0200_payroll_total": "52000.25",
+      "0200_base_pay": "50300.50",
+      "0200_additional_pay": "1699.75",
+      "0200_reserve": "0.00",
+      "0300": "14000.13",
+      "0300_contributions_total": "14000.13",
+      "0300_base_pay": "12500.10",
+      "0300_additional_pay": "1500.03",
+      "0300_reserve": "0.00",
+      "0800": "48700.50",
+      "0900": "29500.62",
+      "total": "144201.50"
+    },
+    "compact": {
+      "materials": "0.00",
+      "0200": "52000.25",
+      "0300": "14000.13",
+      "0800": "48700.50",
+      "0900": "29500.62",
+      "total": "144201.50"
+    }
+  },
+  "support_amounts": {
+    "work-order.pdf": {"amount": "48600.50"},
+    "subscription.png": {"amount": "19000.43"},
+    "records.docx": {"amount": "10500.19"},
+    "payroll.xlsx": {"0201": "50300.50", "0202": "1699.75"},
+    "payroll-control.xlsx": {"0201": "50300.50", "0202": "1699.75"},
+    "insurance.xlsx": {"0300": "14000.13"},
+    "foreign.pdf": {"amount": "48700.50"}
+  },
+  "links": {
+    "work-order.pdf": "0800",
+    "subscription.png": "0900",
+    "records.docx": "0900",
+    "payroll.xlsx": "0200",
+    "payroll-control.xlsx": "0200",
+    "insurance.xlsx": "0300",
+    "foreign.pdf": null
+  }
+}
