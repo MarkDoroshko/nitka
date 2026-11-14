@@ -7,7 +7,23 @@ engine versions are PaddleOCR 3.7.0, PaddleX 3.7.2 and ONNX Runtime 1.31.1.
 python -m pip install "paddleocr==3.7.0" "paddlex[ocr-core]==3.7.2" "onnxruntime==1.31.1"
 ```
 
-Provision the two Apache-2.0 PaddlePaddle ONNX models from the sources below.
+From the repository root, install the verified release (standard library only):
+
+```shell
+python scripts/download_ocr_models.py
+```
+
+This installs the models into `models/ppocr-v5`. Use `--destination PATH` for a
+different location and set `NITKA_OCR_MODELS` accordingly. Use
+`--archive PATH/ppocr-v5.zip` for an offline installation. The script checks the
+pinned archive SHA-256 and all four model files before installing anything.
+It preserves existing folders and verifies an already installed model set.
+
+The release includes [upstream attribution](MODEL-SOURCES.md) and the
+[Apache-2.0 license](LICENSE-PaddleOCR.txt). These are pretrained PaddlePaddle
+weights, not weights trained by the Nitka team.
+
+Alternatively, provision the two Apache-2.0 PaddlePaddle ONNX models from the sources below.
 Copy `inference.onnx` and `inference.yml` from each source into the corresponding
 local subdirectory. Existing laboratory weights with the same hashes can be used
 directly. The worker checks all four files against [the manifest](ppocr-v5.json)
