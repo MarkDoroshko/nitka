@@ -180,6 +180,8 @@ def test_organizer_case_through_upload_widgets(
     app.button(key="nitka_upload_run_submit").click().run(timeout=300)
     assert not app.exception
     assert "Выявлены расхождения" in {item.value for item in app.subheader}
+    completeness = "Полнота представленной первички по статьям 0800, 0900 не установлена."
+    assert completeness in {item.value for item in app.caption}
 
     (run_dir,) = tmp_path.iterdir()
     result = load_run(tmp_path, run_dir.name).analysis
@@ -319,6 +321,7 @@ def test_organizer_case_through_upload_widgets(
     ).click().run()
     assert not reopened.exception and not reopened.error
     assert any("редакция 2" in item.value for item in reopened.caption)
+    assert completeness in {item.value for item in reopened.caption}
     key2 = f"nitka_package_{run_dir.name}_2"
     reopened.button(key=f"{key2}_pdf_prepare").click().run()
     assert not reopened.exception and not reopened.error
@@ -341,6 +344,7 @@ def test_organizer_case_through_upload_widgets(
         "Не проверено",
         "Сверено с оригиналом <акт> & расчётом.",
         "Адреса источников",
+        completeness,
     ):
         assert text in contents
     assert (

@@ -164,6 +164,15 @@ def _check_rows(result: AnalysisResult) -> list[dict[str, str]]:
     return rows
 
 
+def _support_completeness_note(result: AnalysisResult) -> str:
+    if not isinstance(result.matching_context, CaseMatching):
+        return ""
+    codes = sorted({"0800", "0900"}.intersection(result.matching_context.profile.article_codes))
+    if not codes:
+        return ""
+    return f"Полнота представленной первички по статьям {', '.join(codes)} не установлена."
+
+
 def _show_result(result: AnalysisResult) -> None:
     if isinstance(result.matching_context, CaseMatching):
         _show_scope(result.matching_context.profile)
@@ -188,6 +197,9 @@ def _show_result(result: AnalysisResult) -> None:
     if result.checks:
         st.subheader("Показатели КФЗ")
         st.dataframe(_check_rows(result), hide_index=True)
+        completeness = _support_completeness_note(result)
+        if completeness:
+            st.caption(completeness)
 
     names = {file.file_id: file.name for file in result.files}
     if result.excluded_documents:
@@ -314,6 +326,7 @@ def _render_package_pdf(stored: StoredRun) -> bytes:
         history,
         exclusions=_EXCLUSIONS,
         evidence=evidence,
+        support_completeness=_support_completeness_note(result),
     )
 
 

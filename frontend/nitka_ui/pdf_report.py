@@ -66,6 +66,7 @@ def render_report_pdf(
     *,
     exclusions: Mapping[str, str] | None = None,
     evidence: Sequence[tuple[str, Sequence[str]]] = (),
+    support_completeness: str = "",
     demo: bool = False,
 ) -> bytes:
     try:
@@ -281,6 +282,8 @@ def render_report_pdf(
 
     def add_processing_issues() -> None:
         story.append(p("Ограничения и замечания", heading))
+        if support_completeness:
+            story.append(p(support_completeness, body))
         if result.coverage.completed_checks < result.coverage.required_checks:
             story.append(
                 p(
